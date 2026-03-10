@@ -1,12 +1,10 @@
-use crate::{
-    core::fingerprint::ImageFingerprint,
-    core::similarity,
-    error::ImgFprintError,
-    hash::blocks::compute_block_hashes,
-    hash::phash::compute_phash,
-    imgproc::decode::decode_image,
-    imgproc::preprocess::{extract_blocks, extract_global_region, normalize},
-};
+use crate::core::fingerprint::ImageFingerprint;
+use crate::core::similarity;
+use crate::error::ImgFprintError;
+use crate::hash::blocks::compute_block_hashes;
+use crate::hash::phash::compute_phash;
+use crate::imgproc::decode::decode_image;
+use crate::imgproc::preprocess::{extract_blocks, extract_global_region, normalize};
 use sha2::{Digest, Sha256};
 
 /// Static methods for computing and comparing image fingerprints.
