@@ -42,11 +42,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut output_data = Vec::new();
     for (name, fp_result) in results {
         if let Ok(fp) = fp_result {
-            let exact_hash: String = fp
-                .exact_hash()
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect();
+            let exact_hash = fp.exact_hash().iter().fold(String::new(), |mut acc, &b| {
+                use std::fmt::Write;
+                write!(&mut acc, "{:02x}", b).unwrap();
+                acc
+            });
             output_data.push(serde_json::json!({
                 "filename": name,
                 "exact_hash": exact_hash,
