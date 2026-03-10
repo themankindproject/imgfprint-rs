@@ -1,0 +1,30 @@
+[package]
+name = "imgfprint-rs"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance, deterministic image fingerprinting library"
+license = "MIT OR Apache-2.0"
+keywords = ["image", "fingerprint", "perceptual-hash", "phash", "deduplication"]
+categories = ["multimedia::images", "algorithms"]
+rust-version = "1.70"
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+sha2 = "0.10"
+rustdct = "0.7"
+thiserror = "2.0.18"
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[features]
+default = []
+serde = ["dep:serde"]
+
+[dev-dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[profile.dev]
+opt-level = 2
