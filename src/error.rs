@@ -21,4 +21,8 @@ pub enum ImgFprintError {
     /// Internal processing error during fingerprint computation.
     #[error("processing error: {0}")]
     ProcessingError(String),
+
+    /// Image dimensions are too small for fingerprinting.
+    #[error("image dimensions too small: {0}")]
+    ImageTooSmall(String),
 }

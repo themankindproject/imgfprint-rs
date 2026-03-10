@@ -55,6 +55,12 @@ pub use core::fingerprinter::{FingerprinterContext, ImageFingerprinter};
 pub use core::similarity::Similarity;
 pub use error::ImgFprintError;
 
+/// Minimum image dimension (width or height) required for fingerprinting.
+pub const MIN_IMAGE_DIMENSION: u32 = 32;
+
+/// Maximum image dimension (width or height) allowed for fingerprinting.
+pub const MAX_IMAGE_DIMENSION: u32 = 8192;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,5 +233,158 @@ mod tests {
         let fp = ImageFingerprinter::fingerprint(&create_test_image()).unwrap();
         assert_eq!(fp.exact_hash().len(), 32);
         assert_eq!(fp.block_hashes().len(), 16);
+    }
+
+    #[test]
+    fn test_error_image_too_small() {
+        // Create a 31x31 image (below minimum)
+        let img: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
+            ImageBuffer::from_fn(31, 31, |_, _| Rgb([128, 128, 128]));
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .unwrap();
+
+        let result = ImageFingerprinter::fingerprint(&buf);
+        assert!(
+            matches!(result, Err(ImgFprintError::ImageTooSmall(_))),
+            "Expected ImageTooSmall error, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_error_image_too_large() {
+        // Create a 8193x100 image (above maximum)
+        let img: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
+            ImageBuffer::from_fn(8193, 100, |_, _| Rgb([128, 128, 128]));
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .unwrap();
+
+        let result = ImageFingerprinter::fingerprint(&buf);
+        assert!(
+            matches!(result, Err(ImgFprintError::InvalidImage(_))),
+            "Expected InvalidImage error for oversized image, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_minimum_valid_image() {
+        // Create exactly 32x32 image (minimum valid size)
+        let img: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
+            ImageBuffer::from_fn(32, 32, |_, _| Rgb([128, 128, 128]));
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .unwrap();
+
+        let result = ImageFingerprinter::fingerprint(&buf);
+        assert!(
+            result.is_ok(),
+            "32x32 image should be valid, got error: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_rgba_image_handling() {
+        // Create RGBA image with alpha channel
+        use image::Rgba;
+        let img: ImageBuffer<image::Rgba<u8>, Vec<u8>> = ImageBuffer::from_fn(300, 300, |x, y| {
+            let alpha = if (x + y) % 2 == 0 { 255 } else { 128 };
+            Rgba([128, 64, 200, alpha])
+        });
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .unwrap();
+
+        // Should succeed - alpha is handled during RGB conversion
+        let result = ImageFingerprinter::fingerprint(&buf);
+        assert!(
+            result.is_ok(),
+            "RGBA image should be processable: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_grayscale_image_handling() {
+        // Create grayscale image
+        use image::Luma;
+        let img: ImageBuffer<image::Luma<u8>, Vec<u8>> =
+            ImageBuffer::from_fn(300, 300, |x, y| Luma([((x + y) % 256) as u8]));
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .unwrap();
+
+        // Should succeed - grayscale is handled
+        let result = ImageFingerprinter::fingerprint(&buf);
+        assert!(
+            result.is_ok(),
+            "Grayscale image should be processable: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_determinism_across_multiple_calls() {
+        // Test that multiple calls produce identical results
+        let img = create_test_image();
+
+        let fp1 = ImageFingerprinter::fingerprint(&img).unwrap();
+        let fp2 = ImageFingerprinter::fingerprint(&img).unwrap();
+        let fp3 = ImageFingerprinter::fingerprint(&img).unwrap();
+
+        assert_eq!(fp1.exact_hash(), fp2.exact_hash());
+        assert_eq!(fp1.exact_hash(), fp3.exact_hash());
+        assert_eq!(fp1.global_phash(), fp2.global_phash());
+        assert_eq!(fp1.global_phash(), fp3.global_phash());
+        assert_eq!(fp1.block_hashes(), fp2.block_hashes());
+        assert_eq!(fp1.block_hashes(), fp3.block_hashes());
+    }
+
+    #[test]
+    fn test_context_api_determinism() {
+        // Test that context API produces same results as static API
+        let img = create_test_image();
+
+        let fp1 = ImageFingerprinter::fingerprint(&img).unwrap();
+
+        let mut ctx = FingerprinterContext::new();
+        let fp2 = ctx.fingerprint(&img).unwrap();
+
+        assert_eq!(fp1.exact_hash(), fp2.exact_hash());
+        assert_eq!(fp1.global_phash(), fp2.global_phash());
+        assert_eq!(fp1.block_hashes(), fp2.block_hashes());
+    }
+
+    #[test]
+    fn test_similarity_threshold_edge_cases() {
+        let img = create_test_image();
+        let fp = ImageFingerprinter::fingerprint(&img).unwrap();
+
+        // Exact match with itself
+        assert!(fp.is_similar(&fp, 1.0));
+        assert!(fp.is_similar(&fp, 0.0));
+
+        // Distance should be 0 for identical fingerprints
+        assert_eq!(fp.distance(&fp), 0);
+    }
+
+    #[test]
+    fn test_corrupted_image_handling() {
+        // Create a valid PNG header but corrupted data
+        let mut corrupted = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        corrupted.extend_from_slice(&[0u8; 100]); // Garbage data
+
+        let result = ImageFingerprinter::fingerprint(&corrupted);
+        assert!(
+            matches!(
+                result,
+                Err(ImgFprintError::DecodeError(_) | ImgFprintError::InvalidImage(_))
+            ),
+            "Corrupted image should return error, got {:?}",
+            result
+        );
     }
 }

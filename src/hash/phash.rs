@@ -85,25 +85,39 @@ pub fn compute_phash_from_64x64(block: &[f32; 64 * 64]) -> u64 {
 }
 
 /// Computes hash from DCT coefficients using median thresholding.
+///
+/// Uses deterministic sorting with index-based tie-breaking to ensure
+/// consistent hash generation across platforms and compiler optimizations.
 #[inline]
 fn compute_hash_from_coeffs(coeffs: &[f32; TOTAL_HASH_ELEMENTS]) -> u64 {
-    // Copy for sorting (median finding)
-    let mut sorted = *coeffs;
+    // Copy coefficients with their original indices for tie-breaking
+    let mut indexed: [(usize, f32); TOTAL_HASH_ELEMENTS] = std::array::from_fn(|i| (i, coeffs[i]));
 
-    // Sort to find median (64 elements is small, stable sort is fine)
-    sorted.sort_unstable_by(|a, b| {
-        // Handle NaN values (shouldn't occur in practice but be safe)
-        match (a.is_nan(), b.is_nan()) {
-            (true, true) => std::cmp::Ordering::Equal,
+    // Stable sort by value, using index as tie-breaker for deterministic ordering
+    // This ensures consistent median selection even when coefficients are equal
+    indexed.sort_by(|(idx_a, val_a), (idx_b, val_b)| {
+        // Handle NaN values - treat as greater than all valid numbers
+        match (val_a.is_nan(), val_b.is_nan()) {
+            (true, true) => idx_a.cmp(idx_b), // Both NaN: use index ordering
             (true, false) => std::cmp::Ordering::Greater,
             (false, true) => std::cmp::Ordering::Less,
-            (false, false) => a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal),
+            (false, false) => {
+                // Compare values first, then use index as tie-breaker
+                match val_a.partial_cmp(val_b) {
+                    Some(std::cmp::Ordering::Equal) => idx_a.cmp(idx_b),
+                    Some(ordering) => ordering,
+                    None => idx_a.cmp(idx_b), // Shouldn't happen for non-NaN
+                }
+            }
         }
     });
 
-    let median = sorted[TOTAL_HASH_ELEMENTS / 2];
+    // Extract median value
+    let median = indexed[TOTAL_HASH_ELEMENTS / 2].1;
 
     // Build 64-bit hash using median thresholding
+    // Bit 63 (MSB) corresponds to coefficient 0 (DC component)
+    // Bit 0 (LSB) corresponds to coefficient 63
     coeffs
         .iter()
         .enumerate()

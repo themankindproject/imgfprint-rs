@@ -54,7 +54,8 @@ impl FingerprinterContext {
     /// - The image data is empty
     /// - The format is unsupported
     /// - Decoding fails
-    /// - Dimensions exceed 8192x8192 (OOM protection)
+    /// - Dimensions are outside valid range (32x32 to 8192x8192)
+    /// - Processing fails (resize, conversion errors)
     pub fn fingerprint(&mut self, image_bytes: &[u8]) -> Result<ImageFingerprint, ImgFprintError> {
         // Compute exact hash with reusable hasher
         self.sha_hasher.reset();
@@ -65,7 +66,7 @@ impl FingerprinterContext {
         let image = decode_image(image_bytes)?;
 
         // Normalize with cached preprocessor (includes SIMD-accelerated resize)
-        let normalized = self.preprocessor.normalize(&image);
+        let normalized = self.preprocessor.normalize(&image)?;
 
         // Extract global region and compute pHash
         let global_region = extract_global_region(&normalized);
@@ -85,8 +86,9 @@ impl FingerprinterContext {
 
 /// Static methods for computing and comparing image fingerprints.
 ///
-/// This struct provides the primary API for the library. All methods are static
-/// as the fingerprinting process is stateless.
+/// This struct provides the primary API for the library. Methods are static
+/// for convenience, but internally use thread-local state for performance
+/// (cached resizers, DCT plans, and hashers).
 ///
 /// For high-throughput scenarios, use [`FingerprinterContext`] instead
 /// to enable buffer reuse and avoid repeated allocations.
