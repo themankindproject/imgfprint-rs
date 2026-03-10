@@ -25,4 +25,16 @@ pub enum ImgFprintError {
     /// Image dimensions are too small for fingerprinting.
     #[error("image dimensions too small: {0}")]
     ImageTooSmall(String),
+
+    /// Embedding dimensions do not match between two embeddings.
+    #[error("embedding dimension mismatch: expected {expected}, got {actual}")]
+    EmbeddingDimensionMismatch { expected: usize, actual: usize },
+
+    /// Provider error occurred during embedding generation.
+    #[error("embedding provider error: {0}")]
+    ProviderError(String),
+
+    /// Invalid embedding data (empty vector, NaN values, etc.).
+    #[error("invalid embedding: {0}")]
+    InvalidEmbedding(String),
 }

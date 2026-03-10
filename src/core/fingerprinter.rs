@@ -136,6 +136,126 @@ impl ImageFingerprinter {
         similarity::compute_similarity(a, b)
     }
 
+    /// Generates a semantic embedding for the given image using an external provider.
+    ///
+    /// This method delegates to an [`EmbeddingProvider`](crate::embed::EmbeddingProvider) implementation to generate
+    /// CLIP-style embeddings that capture semantic content of the image. The SDK
+    /// does not implement any specific provider; users must bring their own
+    /// implementation (e.g., OpenAI CLIP API, HuggingFace, local models).
+    ///
+    /// # Type Parameters
+    ///
+    /// * `P` - An implementation of [`EmbeddingProvider`](crate::embed::EmbeddingProvider)
+    ///
+    /// # Arguments
+    ///
+    /// * `provider` - The embedding provider implementation
+    /// * `image` - Raw image bytes in any supported format (PNG, JPEG, WebP, etc.)
+    ///
+    /// # Returns
+    ///
+    /// An [`Embedding`](crate::Embedding) containing the semantic vector representation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ImgFprintError`] if:
+    /// - The provider fails to generate an embedding
+    /// - The returned embedding is invalid (empty, contains NaN, etc.)
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use imgfprint_rs::{ImageFingerprinter, EmbeddingProvider, Embedding, ImgFprintError};
+    ///
+    /// // Example provider implementation
+    /// struct MyProvider;
+    ///
+    /// impl EmbeddingProvider for MyProvider {
+    ///     fn embed(&self, _image: &[u8]) -> Result<Embedding, ImgFprintError> {
+    ///         // In practice, call your embedding API here
+    ///         Embedding::new(vec![0.1, 0.2, 0.3, 0.4])
+    ///     }
+    /// }
+    ///
+    /// # fn example() -> Result<(), ImgFprintError> {
+    /// let provider = MyProvider;
+    /// let image_bytes = vec![0u8; 1000]; // Your image data
+    /// let embedding = ImageFingerprinter::semantic_embedding(&provider, &image_bytes)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn semantic_embedding<P: crate::embed::EmbeddingProvider>(
+        provider: &P,
+        image: &[u8],
+    ) -> Result<crate::embed::Embedding, ImgFprintError> {
+        provider.embed(image)
+    }
+
+    /// Compares two semantic embeddings using cosine similarity.
+    ///
+    /// This is a convenience wrapper around [`semantic_similarity()`][crate::semantic_similarity]
+    /// that provides a consistent API with the rest of the `ImageFingerprinter` methods.
+    ///
+    /// Cosine similarity measures the angle between two embedding vectors, returning
+    /// a value in the range [-1.0, 1.0]:
+    /// - 1.0: embeddings point in the same direction (semantically similar)
+    /// - 0.0: embeddings are orthogonal (semantically unrelated)
+    /// - -1.0: embeddings point in opposite directions (semantically opposite)
+    ///
+    /// For typical CLIP embeddings (L2-normalized), the range is [0.0, 1.0].
+    ///
+    /// # Arguments
+    ///
+    /// * `a` - First embedding
+    /// * `b` - Second embedding
+    ///
+    /// # Returns
+    ///
+    /// Cosine similarity as an `f32` in the range [-1.0, 1.0].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ImgFprintError::EmbeddingDimensionMismatch`] if the embeddings
+    /// have different dimensions.
+    ///
+    /// # Performance
+    ///
+    /// - O(n) time complexity where n is the embedding dimension
+    /// - Zero heap allocations
+    /// - SIMD-friendly loop structure
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use imgfprint_rs::{ImageFingerprinter, EmbeddingProvider, Embedding, ImgFprintError};
+    ///
+    /// struct MyProvider;
+    ///
+    /// impl EmbeddingProvider for MyProvider {
+    ///     fn embed(&self, _image: &[u8]) -> Result<Embedding, ImgFprintError> {
+    ///         Embedding::new(vec![0.1, 0.2, 0.3, 0.4])
+    ///     }
+    /// }
+    ///
+    /// # fn example() -> Result<(), ImgFprintError> {
+    /// let provider = MyProvider;
+    /// let img1 = vec![0u8; 1000];
+    /// let img2 = vec![0u8; 1000];
+    ///
+    /// let emb1 = ImageFingerprinter::semantic_embedding(&provider, &img1)?;
+    /// let emb2 = ImageFingerprinter::semantic_embedding(&provider, &img2)?;
+    ///
+    /// let similarity = ImageFingerprinter::semantic_similarity(&emb1, &emb2)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn semantic_similarity(
+        a: &crate::embed::Embedding,
+        b: &crate::embed::Embedding,
+    ) -> Result<f32, ImgFprintError> {
+        crate::embed::semantic_similarity(a, b)
+    }
+
     /// Computes fingerprints for multiple images in batch.
     ///
     /// Processes each image independently and returns results in the same order.

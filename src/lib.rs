@@ -46,6 +46,7 @@
 //! - **Parallel processing**: Batch operations use rayon for multi-core speedup
 
 mod core;
+mod embed;
 mod error;
 mod hash;
 mod imgproc;
@@ -53,6 +54,7 @@ mod imgproc;
 pub use core::fingerprint::ImageFingerprint;
 pub use core::fingerprinter::{FingerprinterContext, ImageFingerprinter};
 pub use core::similarity::Similarity;
+pub use embed::{semantic_similarity, Embedding, EmbeddingProvider};
 pub use error::ImgFprintError;
 
 /// Minimum image dimension (width or height) required for fingerprinting.
