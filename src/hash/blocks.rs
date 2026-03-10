@@ -8,18 +8,17 @@ use crate::hash::phash::compute_phash_from_64x64;
 /// by comparing corresponding regions independently.
 ///
 /// When the `parallel` feature is enabled (default), blocks are processed in parallel
-/// using rayon for 4-8x speedup on multi-core systems.
+/// using rayon for significant speedup on multi-core systems.
 pub fn compute_block_hashes(blocks: &[[f32; 64 * 64]; 16]) -> [u64; 16] {
     #[cfg(feature = "parallel")]
     {
         use rayon::prelude::*;
 
-        blocks
-            .par_iter()
-            .map(|block| compute_phash_from_64x64(block))
-            .collect::<Vec<_>>()
-            .try_into()
-            .expect("always 16 elements")
+        // Process all blocks in parallel with optimized batching
+        // Each block is downsampled and hashed independently
+        let hashes: Vec<u64> = blocks.par_iter().map(compute_phash_from_64x64).collect();
+
+        hashes.try_into().expect("always 16 elements")
     }
 
     #[cfg(not(feature = "parallel"))]

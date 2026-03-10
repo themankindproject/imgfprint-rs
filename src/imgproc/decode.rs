@@ -19,7 +19,7 @@ pub fn decode_image(image_bytes: &[u8]) -> Result<DynamicImage, ImgFprintError> 
         .with_guessed_format()
         .map_err(|e| ImgFprintError::DecodeError(format!("format detection failed: {}", e)))?;
 
-    if let Some((width, height)) = reader.into_dimensions().ok() {
+    if let Ok((width, height)) = reader.into_dimensions() {
         if width > MAX_DIMENSION || height > MAX_DIMENSION {
             return Err(ImgFprintError::InvalidImage(format!(
                 "dimensions {}x{} exceed limit {}x{}",

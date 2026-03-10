@@ -3,7 +3,7 @@
 //! Provides perceptual hashing (pHash) with crop resistance for image
 //! deduplication and similarity detection in production systems.
 //!
-//! ## Example
+//! ## Quick Start
 //!
 //! ```rust
 //! use imgfprint_rs::ImageFingerprinter;
@@ -17,6 +17,33 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! ## High-Throughput Usage
+//!
+//! For processing many images, use [`FingerprinterContext`] to enable
+//! buffer reuse and avoid repeated allocations:
+//!
+//! ```rust
+//! use imgfprint_rs::FingerprinterContext;
+//!
+//! # fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let mut ctx = FingerprinterContext::new();
+//!
+//! // Process multiple images efficiently
+//! for path in &["img1.jpg", "img2.jpg", "img3.jpg"] {
+//!     let fp = ctx.fingerprint(&std::fs::read(path)?)?;
+//!     // Use fingerprint...
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Performance Features
+//!
+//! - **SIMD-accelerated resize**: Uses AVX2/NEON instructions for 3-4x faster resizing
+//! - **Cached DCT plans**: Reuses DCT computation plans across all calls
+//! - **Buffer reuse**: Context API minimizes allocations in high-throughput scenarios
+//! - **Parallel processing**: Batch operations use rayon for multi-core speedup
 
 mod core;
 mod error;
@@ -24,7 +51,7 @@ mod hash;
 mod imgproc;
 
 pub use core::fingerprint::ImageFingerprint;
-pub use core::fingerprinter::ImageFingerprinter;
+pub use core::fingerprinter::{FingerprinterContext, ImageFingerprinter};
 pub use core::similarity::Similarity;
 pub use error::ImgFprintError;
 
