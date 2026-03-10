@@ -62,6 +62,51 @@ impl ImageFingerprinter {
     pub fn compare(a: &ImageFingerprint, b: &ImageFingerprint) -> similarity::Similarity {
         similarity::compute_similarity(a, b)
     }
+
+    /// Computes fingerprints for multiple images in batch.
+    ///
+    /// Processes each image independently and returns results in the same order.
+    /// When the `parallel` feature is enabled, images are processed in parallel.
+    ///
+    /// # Arguments
+    /// * `images` - Slice of (id, image_bytes) tuples
+    ///
+    /// # Returns
+    /// Vec of (id, Result<ImageFingerprint, ImgFprintError>) pairs
+    ///
+    /// # Example
+    /// ```
+    /// # use imgfprint_rs::ImageFingerprinter;
+    /// let images = vec![
+    ///     ("img1".to_string(), vec![0u8; 100]),
+    ///     ("img2".to_string(), vec![0u8; 100]),
+    /// ];
+    /// let results = ImageFingerprinter::fingerprint_batch(&images);
+    /// ```
+    pub fn fingerprint_batch<S: Clone>(
+        images: &[(S, Vec<u8>)],
+    ) -> Vec<(S, Result<ImageFingerprint, ImgFprintError>)>
+    where
+        S: Send + Sync + Clone + 'static,
+    {
+        #[cfg(feature = "parallel")]
+        {
+            use rayon::prelude::*;
+
+            images
+                .par_iter()
+                .map(|(id, bytes)| (id.clone(), Self::fingerprint(bytes)))
+                .collect()
+        }
+
+        #[cfg(not(feature = "parallel"))]
+        {
+            images
+                .iter()
+                .map(|(id, bytes)| (id.clone(), Self::fingerprint(bytes)))
+                .collect()
+        }
+    }
 }
 
 #[inline]

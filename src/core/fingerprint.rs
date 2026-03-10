@@ -47,4 +47,39 @@ impl ImageFingerprint {
     pub fn block_hashes(&self) -> &[u64; 16] {
         &self.block_hashes
     }
+
+    /// Computes the Hamming distance between this and another fingerprint's global hash.
+    ///
+    /// Returns a value from 0 (identical) to 64 (completely different).
+    #[inline]
+    pub fn distance(&self, other: &ImageFingerprint) -> u32 {
+        (self.global_phash ^ other.global_phash).count_ones()
+    }
+
+    /// Checks if this fingerprint is similar to another within a threshold.
+    ///
+    /// # Arguments
+    /// * `other` - The fingerprint to compare against
+    /// * `threshold` - Similarity threshold from 0.0 to 1.0 (default: 0.8)
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Use ImageFingerprinter::fingerprint() to create fingerprints first
+    /// use imgfprint_rs::ImageFingerprinter;
+    ///
+    /// let fp1 = ImageFingerprinter::fingerprint(&std::fs::read("image1.jpg")?).unwrap();
+    /// let fp2 = ImageFingerprinter::fingerprint(&std::fs::read("image2.jpg")?).unwrap();
+    ///
+    /// if fp1.is_similar(&fp2, 0.8) {
+    ///     println!("Images are similar!");
+    /// }
+    /// ```
+    pub fn is_similar(&self, other: &ImageFingerprint, threshold: f32) -> bool {
+        if self.exact == other.exact {
+            return true;
+        }
+        let dist = self.distance(other);
+        let similarity = 1.0 - (dist as f32 / 64.0);
+        similarity >= threshold
+    }
 }
