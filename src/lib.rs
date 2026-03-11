@@ -61,12 +61,6 @@ pub use embed::{LocalProvider, LocalProviderConfig};
 
 pub use error::ImgFprintError;
 
-/// Minimum image dimension (width or height) required for fingerprinting.
-pub const MIN_IMAGE_DIMENSION: u32 = 32;
-
-/// Maximum image dimension (width or height) allowed for fingerprinting.
-pub const MAX_IMAGE_DIMENSION: u32 = 8192;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,6 +385,158 @@ mod tests {
             ),
             "Corrupted image should return error, got {:?}",
             result
+        );
+    }
+
+    #[test]
+    fn test_determinism_1000_iterations() {
+        // Production-grade determinism test - 1000 consecutive fingerprints
+        let img = create_test_image();
+        let expected_fp = ImageFingerprinter::fingerprint(&img).unwrap();
+
+        for i in 0..1000 {
+            let fp = ImageFingerprinter::fingerprint(&img).unwrap();
+            assert_eq!(
+                fp.exact_hash(),
+                expected_fp.exact_hash(),
+                "Exact hash mismatch at iteration {}",
+                i
+            );
+            assert_eq!(
+                fp.global_phash(),
+                expected_fp.global_phash(),
+                "Global phash mismatch at iteration {}",
+                i
+            );
+            assert_eq!(
+                fp.block_hashes(),
+                expected_fp.block_hashes(),
+                "Block hashes mismatch at iteration {}",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_determinism_various_sizes() {
+        // Test determinism across different image dimensions
+        use image::{ImageBuffer, Rgb};
+
+        let sizes = [
+            (32u32, 32u32),
+            (64, 64),
+            (128, 128),
+            (256, 256),
+            (512, 512),
+            (1024, 1024),
+        ];
+
+        for (width, height) in sizes.iter() {
+            let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
+                ImageBuffer::from_fn(*width, *height, |x, y| {
+                    Rgb([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8])
+                });
+            let mut buf = Vec::new();
+            img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+                .unwrap();
+
+            let fp1 = ImageFingerprinter::fingerprint(&buf).unwrap();
+            let fp2 = ImageFingerprinter::fingerprint(&buf).unwrap();
+
+            assert_eq!(
+                fp1.exact_hash(),
+                fp2.exact_hash(),
+                "Size {}x{}: exact hash not deterministic",
+                width,
+                height
+            );
+            assert_eq!(
+                fp1.global_phash(),
+                fp2.global_phash(),
+                "Size {}x{}: global phash not deterministic",
+                width,
+                height
+            );
+            assert_eq!(
+                fp1.block_hashes(),
+                fp2.block_hashes(),
+                "Size {}x{}: block hashes not deterministic",
+                width,
+                height
+            );
+        }
+    }
+
+    #[test]
+    fn test_determinism_with_context_reuse() {
+        // Test that context reuse maintains determinism
+        let img = create_test_image();
+        let mut ctx = FingerprinterContext::new();
+
+        let expected_fp = ctx.fingerprint(&img).unwrap();
+
+        for i in 0..100 {
+            let fp = ctx.fingerprint(&img).unwrap();
+            assert_eq!(
+                fp.exact_hash(),
+                expected_fp.exact_hash(),
+                "Context reuse: exact hash mismatch at iteration {}",
+                i
+            );
+            assert_eq!(
+                fp.global_phash(),
+                expected_fp.global_phash(),
+                "Context reuse: global phash mismatch at iteration {}",
+                i
+            );
+            assert_eq!(
+                fp.block_hashes(),
+                expected_fp.block_hashes(),
+                "Context reuse: block hashes mismatch at iteration {}",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_determinism_across_similar_images() {
+        // Test that similar images produce consistent similarity scores
+        use image::{ImageBuffer, Rgb};
+
+        // Create two visually similar images
+        let img1: ImageBuffer<Rgb<u8>, Vec<u8>> =
+            ImageBuffer::from_fn(300, 300, |_, _| Rgb([100, 150, 200]));
+        let img2: ImageBuffer<Rgb<u8>, Vec<u8>> =
+            ImageBuffer::from_fn(300, 300, |_, _| Rgb([102, 148, 198]));
+
+        let mut buf1 = Vec::new();
+        let mut buf2 = Vec::new();
+        img1.write_to(
+            &mut std::io::Cursor::new(&mut buf1),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        img2.write_to(
+            &mut std::io::Cursor::new(&mut buf2),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+
+        let fp1 = ImageFingerprinter::fingerprint(&buf1).unwrap();
+        let fp1_again = ImageFingerprinter::fingerprint(&buf1).unwrap();
+        let fp2 = ImageFingerprinter::fingerprint(&buf2).unwrap();
+
+        // Same image should always produce same fingerprint
+        assert_eq!(fp1.global_phash(), fp1_again.global_phash());
+
+        // Similarity comparison should be deterministic
+        let sim1 = ImageFingerprinter::compare(&fp1, &fp2);
+        let sim2 = ImageFingerprinter::compare(&fp1, &fp2);
+
+        assert_eq!(sim1.score, sim2.score, "Similarity score not deterministic");
+        assert_eq!(
+            sim1.perceptual_distance, sim2.perceptual_distance,
+            "Perceptual distance not deterministic"
         );
     }
 }

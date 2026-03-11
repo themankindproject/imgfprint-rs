@@ -12,6 +12,8 @@ const PHASH_SIZE: u32 = 32;
 /// Preprocessor with cached resizer and CPU extension detection.
 pub struct Preprocessor {
     resizer: Resizer,
+    dst_buffer: Vec<u8>,
+    gray_buffer: Vec<u8>,
 }
 
 impl Default for Preprocessor {
@@ -45,7 +47,11 @@ impl Preprocessor {
             }
         }
 
-        Self { resizer }
+        Self {
+            resizer,
+            dst_buffer: Vec::with_capacity((NORMALIZED_SIZE * NORMALIZED_SIZE * 3) as usize),
+            gray_buffer: Vec::with_capacity((NORMALIZED_SIZE * NORMALIZED_SIZE) as usize),
+        }
     }
 
     /// Normalizes image to 256x256 grayscale using SIMD-accelerated resize.
@@ -69,7 +75,21 @@ impl Preprocessor {
         let src = Image::from_vec_u8(src_w, src_h, src_data, PixelType::U8x3)
             .map_err(|e| ImgFprintError::ProcessingError(format!("invalid source image: {}", e)))?;
 
-        let mut dst = Image::new(NORMALIZED_SIZE, NORMALIZED_SIZE, PixelType::U8x3);
+        // Reuse destination buffer to avoid allocation
+        self.dst_buffer.clear();
+        self.dst_buffer
+            .resize((NORMALIZED_SIZE * NORMALIZED_SIZE * 3) as usize, 0);
+        let dst_buffer = std::mem::take(&mut self.dst_buffer);
+
+        let mut dst = Image::from_vec_u8(
+            NORMALIZED_SIZE,
+            NORMALIZED_SIZE,
+            dst_buffer,
+            PixelType::U8x3,
+        )
+        .map_err(|e| {
+            ImgFprintError::ProcessingError(format!("invalid destination image: {}", e))
+        })?;
 
         let options = ResizeOptions {
             algorithm: ResizeAlg::Convolution(FilterType::Lanczos3),
@@ -81,17 +101,27 @@ impl Preprocessor {
             .map_err(|e| ImgFprintError::ProcessingError(format!("resize failed: {}", e)))?;
 
         let rgb_bytes = dst.into_vec();
-        let mut gray_bytes = Vec::with_capacity((NORMALIZED_SIZE * NORMALIZED_SIZE) as usize);
+        // Reclaim buffer for reuse
+        self.dst_buffer = rgb_bytes;
 
-        for chunk in rgb_bytes.chunks_exact(3) {
-            let r = chunk[0] as u32;
-            let g = chunk[1] as u32;
-            let b = chunk[2] as u32;
-            let luma = ((77 * r + 150 * g + 29 * b) / 256) as u8;
-            gray_bytes.push(luma);
+        // Reuse grayscale buffer - clear and resize
+        self.gray_buffer.clear();
+        self.gray_buffer
+            .resize((NORMALIZED_SIZE * NORMALIZED_SIZE) as usize, 0);
+
+        for i in (0..self.dst_buffer.len()).step_by(3) {
+            let r = self.dst_buffer[i] as u32;
+            let g = self.dst_buffer[i + 1] as u32;
+            let b = self.dst_buffer[i + 2] as u32;
+            self.gray_buffer[i / 3] = ((77 * r + 150 * g + 29 * b) >> 8) as u8;
         }
 
-        GrayImage::from_raw(NORMALIZED_SIZE, NORMALIZED_SIZE, gray_bytes).ok_or_else(|| {
+        GrayImage::from_raw(
+            NORMALIZED_SIZE,
+            NORMALIZED_SIZE,
+            std::mem::take(&mut self.gray_buffer),
+        )
+        .ok_or_else(|| {
             ImgFprintError::ProcessingError("failed to create grayscale image".to_string())
         })
     }
@@ -116,14 +146,17 @@ pub fn extract_global_region(image: &GrayImage) -> [f32; (PHASH_SIZE * PHASH_SIZ
     let start_x = (NORMALIZED_SIZE - PHASH_SIZE) / 2;
     let start_y = (NORMALIZED_SIZE - PHASH_SIZE) / 2;
     let mut buffer = [0.0f32; (PHASH_SIZE * PHASH_SIZE) as usize];
+    let pixels = image.as_raw();
+    let scale = 1.0 / 255.0;
 
     for y in 0..PHASH_SIZE {
-        let row_start = ((start_y + y) * NORMALIZED_SIZE + start_x) as usize;
-        let buf_start = (y * PHASH_SIZE) as usize;
-        let row_pixels = image.as_raw();
+        let src_row_start = ((start_y + y) * NORMALIZED_SIZE + start_x) as usize;
+        let dst_row_start = (y * PHASH_SIZE) as usize;
+        let src_slice = &pixels[src_row_start..src_row_start + PHASH_SIZE as usize];
+        let dst_slice = &mut buffer[dst_row_start..dst_row_start + PHASH_SIZE as usize];
 
-        for x in 0..PHASH_SIZE {
-            buffer[buf_start + x as usize] = row_pixels[row_start + x as usize] as f32 / 255.0;
+        for (i, &pixel) in src_slice.iter().enumerate() {
+            dst_slice[i] = pixel as f32 * scale;
         }
     }
 
@@ -134,6 +167,7 @@ pub fn extract_global_region(image: &GrayImage) -> [f32; (PHASH_SIZE * PHASH_SIZ
 pub fn extract_blocks(image: &GrayImage) -> [[f32; (BLOCK_SIZE * BLOCK_SIZE) as usize]; 16] {
     let mut blocks = [[0.0f32; (BLOCK_SIZE * BLOCK_SIZE) as usize]; 16];
     let pixels = image.as_raw();
+    let scale = 1.0 / 255.0;
 
     for block_y in 0..4 {
         for block_x in 0..4 {
@@ -144,10 +178,12 @@ pub fn extract_blocks(image: &GrayImage) -> [[f32; (BLOCK_SIZE * BLOCK_SIZE) as 
             for y in 0..BLOCK_SIZE {
                 let src_row_start = ((start_y + y) * NORMALIZED_SIZE + start_x) as usize;
                 let dst_row_start = (y * BLOCK_SIZE) as usize;
+                let src_slice = &pixels[src_row_start..src_row_start + BLOCK_SIZE as usize];
+                let dst_slice =
+                    &mut blocks[block_idx][dst_row_start..dst_row_start + BLOCK_SIZE as usize];
 
-                for x in 0..BLOCK_SIZE {
-                    blocks[block_idx][dst_row_start + x as usize] =
-                        pixels[src_row_start + x as usize] as f32 / 255.0;
+                for (i, &pixel) in src_slice.iter().enumerate() {
+                    dst_slice[i] = pixel as f32 * scale;
                 }
             }
         }

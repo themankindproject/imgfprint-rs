@@ -14,14 +14,12 @@ readme = "README.md"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 fast_image_resize = { version = "6.0", features = ["image"] }
 sha2 = "0.10"
-rustdct = "0.7"
+realfft = "3.4"
+rustfft = "6.2"
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 rayon = { version = "1.10", optional = true }
 tract-onnx = { version = "0.21", optional = true }
-
-# Async support
-async-trait = { version = "0.1", optional = true }
 
 [features]
 default = ["serde", "parallel"]

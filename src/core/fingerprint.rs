@@ -52,7 +52,7 @@ impl ImageFingerprint {
     /// Computes the Hamming distance between this and another fingerprint's global hash.
     ///
     /// Returns a value from 0 (identical) to 64 (completely different).
-    #[inline]
+    #[inline(always)]
     pub fn distance(&self, other: &ImageFingerprint) -> u32 {
         (self.global_phash ^ other.global_phash).count_ones()
     }

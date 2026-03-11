@@ -57,12 +57,12 @@ pub fn compute_similarity(a: &ImageFingerprint, b: &ImageFingerprint) -> Similar
     }
 }
 
-#[inline]
+#[inline(always)]
 fn hamming_distance(a: u64, b: u64) -> u32 {
     (a ^ b).count_ones()
 }
 
-#[inline]
+#[inline(always)]
 fn hash_similarity(distance: u32) -> f32 {
     if distance >= 64 {
         0.0
