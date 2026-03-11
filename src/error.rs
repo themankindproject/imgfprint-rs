@@ -5,6 +5,7 @@ use thiserror::Error;
 /// Errors that can occur during image fingerprinting.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Error, Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum ImgFprintError {
     /// Image decoding failed (corrupted data or unsupported format).
     #[error("decode failed: {0}")]

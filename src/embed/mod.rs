@@ -57,6 +57,7 @@ use crate::error::ImgFprintError;
 /// # }
 /// ```
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Embedding {
     vector: Vec<f32>,

@@ -4,6 +4,7 @@
 /// includes exact hashing for identical detection and perceptual hashing for
 /// similarity detection with resistance to resizing, compression, and cropping.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImageFingerprint {
     pub(crate) exact: [u8; 32],
