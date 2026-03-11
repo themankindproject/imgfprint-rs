@@ -92,3 +92,24 @@ jobs:
 
       - name: Build release
         run: cargo build --all-features --release --verbose
+
+  fuzz:
+    name: Fuzz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run fuzz tests
+        run: |
+          cd fuzz
+          cargo +nightly fuzz run fingerprint_fuzz -- -max_total_time=120s
+          cargo +nightly fuzz run deserialize_fuzz -- -max_total_time=60s
