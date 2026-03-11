@@ -100,7 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("No similar images found above threshold {:.2}", threshold);
     } else {
         println!("Found {} semantically similar images:\n", results.len());
-        println!("{:<12} {:<8} {}", "SIMILARITY", "DIM", "FILENAME");
+        println!("{:<12} {:<8} FILENAME", "SIMILARITY", "DIM");
         println!("{}", "-".repeat(60));
 
         for (filename, similarity, dims) in &results {
