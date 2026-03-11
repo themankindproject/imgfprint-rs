@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use imgfprint_rs::ImageFingerprinter;
+use imgfprint::ImageFingerprinter;
 
 fn create_test_image() -> Vec<u8> {
     use image::{ImageBuffer, Rgb};

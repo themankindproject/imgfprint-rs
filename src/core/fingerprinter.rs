@@ -15,7 +15,7 @@ use std::cell::RefCell;
 ///
 /// # Example
 /// ```
-/// use imgfprint_rs::FingerprinterContext;
+/// use imgfprint::FingerprinterContext;
 ///
 /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let mut ctx = FingerprinterContext::new();
@@ -57,22 +57,14 @@ impl FingerprinterContext {
     /// - Dimensions are outside valid range (32x32 to 8192x8192)
     /// - Processing fails (resize, conversion errors)
     pub fn fingerprint(&mut self, image_bytes: &[u8]) -> Result<ImageFingerprint, ImgFprintError> {
-        // Compute exact hash with reusable hasher
         self.sha_hasher.reset();
         self.sha_hasher.update(image_bytes);
         let exact_hash: [u8; 32] = self.sha_hasher.finalize_reset().into();
 
-        // Decode image
         let image = decode_image(image_bytes)?;
-
-        // Normalize with cached preprocessor (includes SIMD-accelerated resize)
         let normalized = self.preprocessor.normalize(&image)?;
-
-        // Extract global region and compute pHash
         let global_region = extract_global_region(&normalized);
         let global_phash = compute_phash(&global_region);
-
-        // Extract blocks and compute block hashes
         let blocks = extract_blocks(&normalized);
         let block_hashes = compute_block_hashes(&blocks);
 
@@ -165,7 +157,7 @@ impl ImageFingerprinter {
     /// # Example
     ///
     /// ```rust
-    /// use imgfprint_rs::{ImageFingerprinter, EmbeddingProvider, Embedding, ImgFprintError};
+    /// use imgfprint::{ImageFingerprinter, EmbeddingProvider, Embedding, ImgFprintError};
     ///
     /// // Example provider implementation
     /// struct MyProvider;
@@ -227,7 +219,7 @@ impl ImageFingerprinter {
     /// # Example
     ///
     /// ```rust
-    /// use imgfprint_rs::{ImageFingerprinter, EmbeddingProvider, Embedding, ImgFprintError};
+    /// use imgfprint::{ImageFingerprinter, EmbeddingProvider, Embedding, ImgFprintError};
     ///
     /// struct MyProvider;
     ///
@@ -269,7 +261,7 @@ impl ImageFingerprinter {
     ///
     /// # Example
     /// ```
-    /// # use imgfprint_rs::ImageFingerprinter;
+    /// # use imgfprint::ImageFingerprinter;
     /// let images = vec![
     ///     ("img1".to_string(), vec![0u8; 100]),
     ///     ("img2".to_string(), vec![0u8; 100]),

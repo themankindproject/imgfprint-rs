@@ -1,4 +1,4 @@
-use imgfprint_rs::ImageFingerprinter;
+use imgfprint::ImageFingerprinter;
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
 
@@ -25,13 +25,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Binary: {} bytes\n", std::fs::metadata(bin_path)?.len());
 
     // Deserialize from JSON
-    let fp_json: imgfprint_rs::ImageFingerprint = serde_json::from_str(&json)?;
+    let fp_json: imgfprint::ImageFingerprint = serde_json::from_str(&json)?;
     println!("From JSON - global_phash: {:016x}", fp_json.global_phash());
 
     // Deserialize from binary
     let file = File::open(bin_path)?;
     let mut reader = BufReader::new(file);
-    let fp_bin: imgfprint_rs::ImageFingerprint = bincode::deserialize_from(&mut reader)?;
+    let fp_bin: imgfprint::ImageFingerprint = bincode::deserialize_from(&mut reader)?;
     println!("From binary - global_phash: {:016x}", fp_bin.global_phash());
 
     // Clean up

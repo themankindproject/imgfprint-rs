@@ -73,8 +73,13 @@ fn hash_similarity(distance: u32) -> f32 {
 
 /// Computes block-level similarity with crop resistance.
 ///
-/// Filters out blocks with Hamming distance > 32 to handle cropped images
-/// where some regions may not overlap.
+/// Compares corresponding blocks from the 4x4 grid and filters out blocks
+/// with Hamming distance > 32. This threshold handles cropped images where
+/// some regions may not overlap between the two images.
+///
+/// For example, if image A is cropped to show only the top-left quadrant,
+/// blocks in the bottom-right of A won't match B, but the top-left blocks
+/// will still contribute to the similarity score.
 fn compute_block_similarity(a: &[u64; 16], b: &[u64; 16]) -> f32 {
     let mut total_similarity = 0.0f32;
     let mut valid_comparisons = 0u32;

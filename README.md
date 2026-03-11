@@ -1,8 +1,8 @@
-# imgfprint-rs
+# imgfprint
 
-[![Crates.io](https://img.shields.io/crates/v/imgfprint-rs)](https://crates.io/crates/imgfprint-rs)
-[![Documentation](https://docs.rs/imgfprint-rs/badge.svg)](https://docs.rs/imgfprint-rs)
-[![License](https://img.shields.io/crates/l/imgfprint-rs)](LICENSE)
+[![Crates.io](https://img.shields.io/crates/v/imgfprint)](https://crates.io/crates/imgfprint)
+[![Documentation](https://docs.rs/imgfprint/badge.svg)](https://docs.rs/imgfprint)
+[![License](https://img.shields.io/crates/l/imgfprint)](LICENSE)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/themankindproject/imgfprint-rs/main.yml)](https://github.com/themankindproject/imgfprint-rs/actions)
 ![Rust Version](https://img.shields.io/badge/rust-1.70%2B-blue)
 
@@ -10,13 +10,13 @@ High-performance image fingerprinting library for Rust with **perceptual hashing
 
 ## Overview
 
-`imgfprint-rs` provides multiple complementary approaches to image identification and similarity detection:
+`imgfprint` provides multiple complementary approaches to image identification and similarity detection:
 
 | Method | Use Case | Speed | Precision |
 |--------|----------|-------|-----------|
 | **SHA256** | Exact deduplication | ~1ms | 100% exact |
 | **pHash** | Perceptual similarity | ~1-5ms | Resilient to compression, resizing |
-| **Semantic** | Content understanding | Provider-dependent | Captures visual meaning |
+| **Semantic** | Content understanding | Local or API | Captures visual meaning |
 
 Perfect for:
 - Duplicate image detection
@@ -31,7 +31,7 @@ Perfect for:
 - **SHA256 Exact Hash** - Byte-identical detection
 - **pHash Perceptual Hash** - DCT-based similarity (resilient to compression, resizing, minor edits)
 - **Block-Level Hashing** - 4×4 grid for crop resistance
-- **Semantic Embeddings** - CLIP-style vector representations via external providers
+- **Semantic Embeddings** - CLIP-style vector representations via external providers or local ONNX models
 - **SIMD Acceleration** - AVX2/NEON optimized resizing
 - **Parallel Processing** - Multi-core batch operations
 - **Zero-Copy APIs** - Minimal allocations in hot paths
@@ -43,7 +43,7 @@ Perfect for:
 
 ```toml
 [dependencies]
-imgfprint-rs = "0.1"
+imgfprint = "0.1"
 ```
 
 ### Feature Flags
@@ -52,11 +52,18 @@ imgfprint-rs = "0.1"
 |---------|---------|-------------|
 | `serde` | ✅ | Serialization support (JSON, binary) |
 | `parallel` | ✅ | Parallel batch processing with rayon |
+| `local-embedding` | ❌ | Local ONNX model inference for semantic embeddings |
 
 Minimal build (no parallel processing):
 ```toml
 [dependencies]
-imgfprint-rs = { version = "0.1", default-features = false }
+imgfprint = { version = "0.1", default-features = false }
+```
+
+With local embeddings (requires ONNX model):
+```toml
+[dependencies]
+imgfprint = { version = "0.1", features = ["local-embedding"] }
 ```
 
 ## Quick Start
@@ -64,7 +71,7 @@ imgfprint-rs = { version = "0.1", default-features = false }
 ### Basic Fingerprinting
 
 ```rust
-use imgfprint_rs::ImageFingerprinter;
+use imgfprint::ImageFingerprinter;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let img1 = std::fs::read("photo1.jpg")?;
@@ -89,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Semantic Embeddings
 
 ```rust
-use imgfprint_rs::{ImageFingerprinter, EmbeddingProvider, Embedding, ImgFprintError};
+use imgfprint::{EmbeddingProvider, Embedding, ImgFprintError};
 
 // Implement your provider (OpenAI, HuggingFace, local model, etc.)
 struct MyClipProvider;
@@ -109,16 +116,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let img1 = std::fs::read("cat.jpg")?;
     let img2 = std::fs::read("dog.jpg")?;
     
-    let emb1 = ImageFingerprinter::semantic_embedding(&provider, &img1)?;
-    let emb2 = ImageFingerprinter::semantic_embedding(&provider, &img2)?;
+    let emb1 = provider.embed(&img1)?;
+    let emb2 = provider.embed(&img2)?;
     
     // Cosine similarity in range [-1.0, 1.0]
-    let similarity = ImageFingerprinter::semantic_similarity(&emb1, &emb2)?;
+    let similarity = imgfprint::semantic_similarity(&emb1, &emb2)?;
     
     println!("Semantic similarity: {:.4}", similarity);
     // 1.0 = identical content
     // 0.0 = unrelated content
     // -1.0 = opposite content (rare with CLIP)
+    
+    Ok(())
+}
+```
+
+#### Local Embeddings (ONNX)
+
+With the `local-embedding` feature, you can run CLIP models locally without external APIs:
+
+```rust
+use imgfprint::{LocalProvider, LocalProviderConfig, EmbeddingProvider};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Load a CLIP model in ONNX format
+    let provider = LocalProvider::from_file("clip-vit-base-patch32.onnx")?;
+    
+    // Or with custom configuration
+    let provider = LocalProvider::from_file_with_config(
+        "clip.onnx",
+        LocalProviderConfig::clip_vit_large_patch14()
+    )?;
+    
+    // Generate embedding
+    let image = std::fs::read("photo.jpg")?;
+    let embedding = provider.embed(&image)?;
+    
+    println!("Generated {}-dimensional embedding", embedding.len());
     
     Ok(())
 }
@@ -131,7 +165,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #### Single Image
 
 ```rust
-use imgfprint_rs::ImageFingerprinter;
+use imgfprint::ImageFingerprinter;
 
 let fp = ImageFingerprinter::fingerprint(&image_bytes)?;
 ```
@@ -141,7 +175,7 @@ let fp = ImageFingerprinter::fingerprint(&image_bytes)?;
 Process thousands of images efficiently with automatic parallelization:
 
 ```rust
-use imgfprint_rs::ImageFingerprinter;
+use imgfprint::ImageFingerprinter;
 
 let images: Vec<(String, Vec<u8>)> = vec![
     ("img1.jpg".into(), bytes1),
@@ -164,7 +198,7 @@ for (id, result) in results {
 For sustained high-throughput scenarios, use `FingerprinterContext` to enable buffer reuse:
 
 ```rust
-use imgfprint_rs::FingerprinterContext;
+use imgfprint::FingerprinterContext;
 
 let mut ctx = FingerprinterContext::new();
 
@@ -193,7 +227,7 @@ let blocks: &[u64; 16] = fp.block_hashes();
 #### Using Similarity Scores
 
 ```rust
-use imgfprint_rs::ImageFingerprinter;
+use imgfprint::ImageFingerprinter;
 
 let sim = ImageFingerprinter::compare(&fp1, &fp2);
 
@@ -216,10 +250,10 @@ if fp1.is_similar(&fp2, 0.85) {
 
 ### Semantic Embeddings
 
-#### Creating Embeddings
+#### Creating Embeddings with Custom Provider
 
 ```rust
-use imgfprint_rs::{ImageFingerprinter, EmbeddingProvider, Embedding};
+use imgfprint::{EmbeddingProvider, Embedding, ImgFprintError};
 
 // Your provider implementation
 struct HuggingFaceProvider { /* ... */ }
@@ -235,18 +269,63 @@ impl EmbeddingProvider for HuggingFaceProvider {
         Embedding::new(vector)
     }
 }
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = HuggingFaceProvider;
+    
+    let img1 = std::fs::read("cat.jpg")?;
+    let img2 = std::fs::read("dog.jpg")?;
+    
+    let emb1 = provider.embed(&img1)?;
+    let emb2 = provider.embed(&img2)?;
+    
+    // Compare embeddings
+    let similarity = imgfprint::semantic_similarity(&emb1, &emb2)?;
+    println!("Similarity: {:.4}", similarity);
+    
+    Ok(())
+}
 ```
 
 #### Computing Cosine Similarity
 
 ```rust
-use imgfprint_rs::{semantic_similarity, Embedding};
+use imgfprint::{semantic_similarity, Embedding};
 
 let emb1 = Embedding::new(vec![0.1, 0.2, 0.3, 0.4])?;
 let emb2 = Embedding::new(vec![0.2, 0.3, 0.4, 0.5])?;
 
 // Returns f32 in range [-1.0, 1.0]
 let sim = semantic_similarity(&emb1, &emb2)?;
+```
+
+#### Using ImageFingerprinter Methods
+
+Alternatively, you can use the convenience methods on `ImageFingerprinter`:
+
+```rust
+use imgfprint::{ImageFingerprinter, EmbeddingProvider, Embedding, ImgFprintError};
+
+struct MyProvider;
+
+impl EmbeddingProvider for MyProvider {
+    fn embed(&self, _image: &[u8]) -> Result<Embedding, ImgFprintError> {
+        Embedding::new(vec![0.1, 0.2, 0.3, 0.4])
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = MyProvider;
+    
+    let img = std::fs::read("photo.jpg")?;
+    let embedding = ImageFingerprinter::semantic_embedding(&provider, &img)?;
+    
+    // Compare two embeddings
+    let similarity = ImageFingerprinter::semantic_similarity(&embedding, &embedding)?;
+    println!("Similarity: {:.4}", similarity);
+    
+    Ok(())
+}
 ```
 
 ## Architecture
@@ -313,7 +392,7 @@ cargo bench
 ## Error Handling
 
 ```rust
-use imgfprint_rs::{ImageFingerprinter, ImgFprintError};
+use imgfprint::{ImageFingerprinter, ImgFprintError};
 
 match ImageFingerprinter::fingerprint(&bytes) {
     Ok(fp) => { /* success */ }
@@ -339,7 +418,7 @@ match ImageFingerprinter::fingerprint(&bytes) {
 ### JSON
 
 ```rust
-use imgfprint_rs::ImageFingerprinter;
+use imgfprint::ImageFingerprinter;
 use serde_json;
 
 let fp = ImageFingerprinter::fingerprint(&bytes)?;
@@ -379,6 +458,7 @@ let fp: ImageFingerprint = bincode::deserialize(&bytes)?;
 | pHash | ✅ | ✅ | ✅ |
 | Block hashes | ✅ | ❌ | ❌ |
 | Semantic embeddings | ✅ | ❌ | ❌ |
+| **Local ONNX inference** | ✅ | ❌ | ❌ |
 | Parallel batch | ✅ | ❌ | ❌ |
 | SIMD acceleration | ✅ | ❌ | ❌ |
 | Context API | ✅ | ❌ | ❌ |
@@ -390,11 +470,17 @@ See the `examples/` directory for complete working examples:
 - `batch_process.rs` - Process millions of images efficiently
 - `compare_images.rs` - Compare two images and show similarity
 - `find_duplicates.rs` - Find duplicate images in a directory
-- `semantic_search.rs` - Content-based image search with embeddings
+- `serialize.rs` - Serialize/deserialize fingerprints to JSON and binary
+- `similarity_search.rs` - Perceptual similarity search in a directory
+- `semantic_search.rs` - Content-based image search with CLIP embeddings (requires `local-embedding` feature)
 
 Run an example:
 ```bash
+# Compare two images
 cargo run --example compare_images -- images/photo1.jpg images/photo2.jpg
+
+# Semantic search with local CLIP model (requires local-embedding feature)
+cargo run --example semantic_search --features local-embedding -- model.onnx query.jpg ./images 0.85
 ```
 
 ## Contributing

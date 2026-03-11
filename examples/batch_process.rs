@@ -1,4 +1,4 @@
-use imgfprint_rs::ImageFingerprinter;
+use imgfprint::ImageFingerprinter;
 use std::fs;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

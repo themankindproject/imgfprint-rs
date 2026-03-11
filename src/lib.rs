@@ -6,7 +6,7 @@
 //! ## Quick Start
 //!
 //! ```rust
-//! use imgfprint_rs::ImageFingerprinter;
+//! use imgfprint::ImageFingerprinter;
 //!
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let fp1 = ImageFingerprinter::fingerprint(&std::fs::read("img1.jpg")?)?;
@@ -24,7 +24,7 @@
 //! buffer reuse and avoid repeated allocations:
 //!
 //! ```rust
-//! use imgfprint_rs::FingerprinterContext;
+//! use imgfprint::FingerprinterContext;
 //!
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut ctx = FingerprinterContext::new();
@@ -55,6 +55,10 @@ pub use core::fingerprint::ImageFingerprint;
 pub use core::fingerprinter::{FingerprinterContext, ImageFingerprinter};
 pub use core::similarity::Similarity;
 pub use embed::{semantic_similarity, Embedding, EmbeddingProvider};
+
+#[cfg(feature = "local-embedding")]
+pub use embed::{LocalProvider, LocalProviderConfig};
+
 pub use error::ImgFprintError;
 
 /// Minimum image dimension (width or height) required for fingerprinting.

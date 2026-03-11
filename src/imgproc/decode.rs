@@ -6,15 +6,24 @@ use std::io::Cursor;
 
 const MAX_DIMENSION: u32 = 8192;
 const MIN_DIMENSION: u32 = 32;
+const MAX_INPUT_BYTES: usize = 50 * 1024 * 1024; // 50MB to prevent DoS
 
 /// Decodes image bytes and validates dimensions.
 ///
-/// Checks dimensions before full decode to prevent OOM attacks.
-/// Maximum allowed dimension is 8192x8192 pixels.
-/// Minimum required dimension is 32x32 pixels for fingerprinting.
+/// - Checks dimensions before full decode to prevent OOM attacks.
+/// - Maximum allowed dimension is 8192x8192 pixels.
+/// - Minimum required dimension is 32x32 pixels for fingerprinting.
 pub fn decode_image(image_bytes: &[u8]) -> Result<DynamicImage, ImgFprintError> {
     if image_bytes.is_empty() {
         return Err(ImgFprintError::InvalidImage("empty input".to_string()));
+    }
+
+    if image_bytes.len() > MAX_INPUT_BYTES {
+        return Err(ImgFprintError::InvalidImage(format!(
+            "input too large: {} bytes exceeds limit of {} bytes",
+            image_bytes.len(),
+            MAX_INPUT_BYTES
+        )));
     }
 
     let reader = image::ImageReader::new(Cursor::new(image_bytes))

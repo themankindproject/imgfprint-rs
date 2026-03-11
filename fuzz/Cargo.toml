@@ -1,5 +1,5 @@
 [package]
-name = "imgfprint-rs-fuzz"
+name = "imgfprint-fuzz"
 version = "0.0.0"
 edition = "2021"
 
@@ -19,7 +19,7 @@ name = "deserialize_fuzz"
 path = "fuzz_targets/deserialize_fuzz.rs"
 
 [dependencies]
-imgfprint-rs = { path = "..", features = ["serde"] }
+imgfprint = { path = "..", features = ["serde"] }
 libfuzzer-sys = "0.4"
 serde_json = "1.0"
 bincode = "1.3"

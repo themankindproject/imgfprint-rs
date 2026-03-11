@@ -6,7 +6,7 @@
 //! ## Example
 //!
 //! ```rust,ignore
-//! use imgfprint_rs::{ImageFingerprinter, Embedding, EmbeddingProvider};
+//! use imgfprint::{ImageFingerprinter, Embedding, EmbeddingProvider};
 //!
 //! // Define your provider implementation
 //! struct MyClipProvider;
@@ -23,6 +23,12 @@
 //! ```
 
 use crate::error::ImgFprintError;
+
+#[cfg(feature = "local-embedding")]
+pub mod local;
+
+#[cfg(feature = "local-embedding")]
+pub use local::{LocalProvider, LocalProviderConfig};
 
 /// A semantic embedding vector representing image content.
 ///
@@ -44,9 +50,9 @@ use crate::error::ImgFprintError;
 /// # Examples
 ///
 /// ```rust
-/// use imgfprint_rs::Embedding;
+/// use imgfprint::Embedding;
 ///
-/// # fn example() -> Result<(), imgfprint_rs::ImgFprintError> {
+/// # fn example() -> Result<(), imgfprint::ImgFprintError> {
 /// // Create from a Vec<f32>
 /// let embedding = Embedding::new(vec![0.1, 0.2, 0.3, 0.4])?;
 ///
@@ -79,9 +85,9 @@ impl Embedding {
     /// # Examples
     ///
     /// ```rust
-    /// use imgfprint_rs::Embedding;
+    /// use imgfprint::Embedding;
     ///
-    /// # fn example() -> Result<(), imgfprint_rs::ImgFprintError> {
+    /// # fn example() -> Result<(), imgfprint::ImgFprintError> {
     /// let embedding = Embedding::new(vec![0.1, 0.2, 0.3])?;
     /// assert_eq!(embedding.len(), 3);
     /// # Ok(())
@@ -108,9 +114,9 @@ impl Embedding {
     /// # Examples
     ///
     /// ```rust
-    /// use imgfprint_rs::Embedding;
+    /// use imgfprint::Embedding;
     ///
-    /// # fn example() -> Result<(), imgfprint_rs::ImgFprintError> {
+    /// # fn example() -> Result<(), imgfprint::ImgFprintError> {
     /// let embedding = Embedding::new(vec![0.1, 0.2, 0.3])?;
     /// let slice = embedding.as_slice();
     /// assert_eq!(slice, &[0.1, 0.2, 0.3]);
@@ -129,9 +135,9 @@ impl Embedding {
     /// # Examples
     ///
     /// ```rust
-    /// use imgfprint_rs::Embedding;
+    /// use imgfprint::Embedding;
     ///
-    /// # fn example() -> Result<(), imgfprint_rs::ImgFprintError> {
+    /// # fn example() -> Result<(), imgfprint::ImgFprintError> {
     /// let embedding = Embedding::new(vec![0.1, 0.2, 0.3])?;
     /// let vec = embedding.vector();
     /// assert_eq!(vec, vec![0.1, 0.2, 0.3]);
@@ -147,9 +153,9 @@ impl Embedding {
     /// # Examples
     ///
     /// ```rust
-    /// use imgfprint_rs::Embedding;
+    /// use imgfprint::Embedding;
     ///
-    /// # fn example() -> Result<(), imgfprint_rs::ImgFprintError> {
+    /// # fn example() -> Result<(), imgfprint::ImgFprintError> {
     /// let embedding = Embedding::new(vec![0.1, 0.2, 0.3, 0.4])?;
     /// assert_eq!(embedding.len(), 4);
     /// # Ok(())
@@ -176,9 +182,9 @@ impl Embedding {
     /// # Examples
     ///
     /// ```rust
-    /// use imgfprint_rs::Embedding;
+    /// use imgfprint::Embedding;
     ///
-    /// # fn example() -> Result<(), imgfprint_rs::ImgFprintError> {
+    /// # fn example() -> Result<(), imgfprint::ImgFprintError> {
     /// let embedding = Embedding::new(vec![0.1; 512])?;
     /// assert_eq!(embedding.dimension(), 512);
     /// # Ok(())
@@ -204,7 +210,7 @@ impl Embedding {
 /// # Example Implementation
 ///
 /// ```rust
-/// use imgfprint_rs::{EmbeddingProvider, Embedding, ImgFprintError};
+/// use imgfprint::{EmbeddingProvider, Embedding, ImgFprintError};
 ///
 /// struct DummyProvider;
 ///
@@ -233,7 +239,7 @@ pub trait EmbeddingProvider {
     /// # Examples
     ///
     /// ```rust
-    /// use imgfprint_rs::{EmbeddingProvider, ImgFprintError};
+    /// use imgfprint::{EmbeddingProvider, ImgFprintError};
     ///
     /// # fn example<P: EmbeddingProvider>(provider: &P) -> Result<(), ImgFprintError> {
     /// let image_bytes = vec![0u8; 1000]; // Your image data
@@ -279,9 +285,9 @@ pub trait EmbeddingProvider {
 /// # Examples
 ///
 /// ```rust
-/// use imgfprint_rs::{Embedding, semantic_similarity};
+/// use imgfprint::{Embedding, semantic_similarity};
 ///
-/// # fn example() -> Result<(), imgfprint_rs::ImgFprintError> {
+/// # fn example() -> Result<(), imgfprint::ImgFprintError> {
 /// let a = Embedding::new(vec![1.0, 0.0, 0.0])?;
 /// let b = Embedding::new(vec![1.0, 0.0, 0.0])?;
 ///

@@ -66,7 +66,7 @@ impl ImageFingerprint {
     /// # Example
     /// ```ignore
     /// // Use ImageFingerprinter::fingerprint() to create fingerprints first
-    /// use imgfprint_rs::ImageFingerprinter;
+    /// use imgfprint::ImageFingerprinter;
     ///
     /// let fp1 = ImageFingerprinter::fingerprint(&std::fs::read("image1.jpg")?).unwrap();
     /// let fp2 = ImageFingerprinter::fingerprint(&std::fs::read("image2.jpg")?).unwrap();
@@ -76,6 +76,11 @@ impl ImageFingerprint {
     /// }
     /// ```
     pub fn is_similar(&self, other: &ImageFingerprint, threshold: f32) -> bool {
+        assert!(
+            (0.0..=1.0).contains(&threshold),
+            "threshold must be in range [0.0, 1.0], got {}",
+            threshold
+        );
         if self.exact == other.exact {
             return true;
         }
