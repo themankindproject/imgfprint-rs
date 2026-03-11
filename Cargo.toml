@@ -7,6 +7,8 @@ license = "MIT OR Apache-2.0"
 keywords = ["image", "fingerprint", "perceptual-hash", "phash", "deduplication"]
 categories = ["multimedia::images", "algorithms"]
 rust-version = "1.70"
+repository = "https://github.com/themankindproject/imgfprint-rs"
+readme = "README.md"
 
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
