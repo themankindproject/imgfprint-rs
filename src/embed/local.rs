@@ -56,7 +56,7 @@ impl Default for LocalProviderConfig {
             input_size: 224,
             // CLIP normalization values
             normalize_mean: [0.48145466, 0.4578275, 0.40821073],
-            normalize_std: [0.26862954, 0.26130258, 0.27577711],
+            normalize_std: [0.26862954, 0.261_302_6, 0.275_777_1],
             normalize_output: true,
         }
     }
@@ -68,7 +68,7 @@ impl LocalProviderConfig {
         Self {
             input_size: 224,
             normalize_mean: [0.48145466, 0.4578275, 0.40821073],
-            normalize_std: [0.26862954, 0.26130258, 0.27577711],
+            normalize_std: [0.26862954, 0.261_302_6, 0.275_777_1],
             normalize_output: true,
         }
     }
@@ -78,7 +78,7 @@ impl LocalProviderConfig {
         Self {
             input_size: 336,
             normalize_mean: [0.48145466, 0.4578275, 0.40821073],
-            normalize_std: [0.26862954, 0.26130258, 0.27577711],
+            normalize_std: [0.26862954, 0.261_302_6, 0.275_777_1],
             normalize_output: true,
         }
     }
@@ -220,8 +220,9 @@ impl LocalProvider {
         model_bytes: &[u8],
         config: LocalProviderConfig,
     ) -> Result<Self, ImgFprintError> {
+        let mut cursor = std::io::Cursor::new(model_bytes);
         let model = tract_onnx::onnx()
-            .model_for_read(&mut model_bytes.as_ref())
+            .model_for_read(&mut cursor)
             .map_err(|e| {
                 ImgFprintError::ProviderError(format!("Failed to parse ONNX model: {}", e))
             })?
@@ -324,7 +325,7 @@ impl EmbeddingProvider for LocalProvider {
 
         // Extract the embedding vector
         let output_tensor = output
-            .get(0)
+            .first()
             .ok_or_else(|| ImgFprintError::ProviderError("Empty model output".to_string()))?;
 
         let embedding_vec: Vec<f32> = output_tensor
