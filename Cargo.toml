@@ -10,10 +10,10 @@ rust-version = "1.70"
 
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
-fast_image_resize = { version = "4.0", features = ["image"] }
+fast_image_resize = { version = "6.0", features = ["image"] }
 sha2 = "0.10"
 rustdct = "0.7"
-thiserror = "2.0.18"
+thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 rayon = { version = "1.10", optional = true }
 once_cell = "1.20"
