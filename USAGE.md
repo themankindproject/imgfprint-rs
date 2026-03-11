@@ -1,0 +1,643 @@
+# imgfprint Usage Guide
+
+> Complete API reference and examples for high-performance image fingerprinting
+
+---
+
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Core API](#core-api)
+  - [ImageFingerprinter](#imagefingerprinter)
+  - [FingerprinterContext](#fingerprintercontext)
+  - [ImageFingerprint](#imagefingerprint)
+  - [Similarity](#similarity)
+- [Advanced Usage](#advanced-usage)
+  - [Batch Processing](#batch-processing)
+  - [Semantic Embeddings](#semantic-embeddings)
+- [Error Handling](#error-handling)
+- [Performance Tips](#performance-tips)
+- [Feature Flags](#feature-flags)
+
+---
+
+## Quick Start
+
+Add the dependency to your `Cargo.toml`:
+
+```toml
+[dependencies]
+imgfprint = "0.1.2"
+```
+
+### Basic Example
+
+Compare two images for similarity:
+
+```rust
+use imgfprint::ImageFingerprinter;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Load images
+    let img1 = std::fs::read("photo1.jpg")?;
+    let img2 = std::fs::read("photo2.jpg")?;
+    
+    // Generate fingerprints
+    let fp1 = ImageFingerprinter::fingerprint(&img1)?;
+    let fp2 = ImageFingerprinter::fingerprint(&img2)?;
+    
+    // Compare
+    let sim = ImageFingerprinter::compare(&fp1, &fp2);
+    
+    println!("Similarity: {:.2}", sim.score);
+    println!("Exact match: {}", sim.exact_match);
+    
+    if sim.score > 0.8 {
+        println!("Images are perceptually similar");
+    }
+    
+    Ok(())
+}
+```
+
+---
+
+## Core API
+
+### ImageFingerprinter
+
+Static methods for computing and comparing fingerprints. The primary entry point for most use cases.
+
+#### `fingerprint()`
+
+```rust
+pub fn fingerprint(
+    image_bytes: &[u8]
+) -> Result<ImageFingerprint, ImgFprintError>
+```
+
+Computes a perceptual fingerprint from raw image bytes.
+
+**Returns:**
+- `ImageFingerprint` containing:
+  - SHA256 hash of original bytes (exact matching)
+  - Global perceptual hash (center 32x32 region)
+  - 16 block-level hashes (4x4 grid for crop resistance)
+
+**Example:**
+```rust
+use imgfprint::ImageFingerprinter;
+
+let image_bytes = std::fs::read("image.png")?;
+let fingerprint = ImageFingerprinter::fingerprint(&image_bytes)?;
+```
+
+#### `compare()`
+
+```rust
+pub fn compare(
+    a: &ImageFingerprint,
+    b: &ImageFingerprint
+) -> Similarity
+```
+
+Compares two fingerprints and returns a similarity score.
+
+**Returns:**
+- `Similarity` struct with:
+  - `score`: 0.0 (different) to 1.0 (identical)
+  - `exact_match`: true if SHA256 hashes match
+  - `perceptual_distance`: Hamming distance 0-64
+
+**Example:**
+```rust
+let sim = ImageFingerprinter::compare(&fp1, &fp2);
+
+println!("Score: {:.2}", sim.score);              // 0.0 - 1.0
+println!("Exact match: {}", sim.exact_match);      // true/false
+println!("Distance: {}", sim.perceptual_distance); // 0-64
+```
+
+**Similarity Thresholds:**
+
+| Score Range | Interpretation |
+|-------------|----------------|
+| 1.0 | Identical images |
+| 0.8 - 1.0 | Same image, minor edits |
+| 0.5 - 0.8 | Visually similar |
+| < 0.5 | Different images |
+
+#### `fingerprint_batch()`
+
+```rust
+pub fn fingerprint_batch<S>(
+    images: &[(S, Vec<u8>)]
+) -> Vec<(S, Result<ImageFingerprint, ImgFprintError>)>
+where
+    S: Send + Sync + Clone + 'static
+```
+
+Processes multiple images in parallel (requires `parallel` feature).
+
+**Example:**
+```rust
+let images = vec![
+    ("img1.jpg".to_string(), std::fs::read("img1.jpg")?),
+    ("img2.jpg".to_string(), std::fs::read("img2.jpg")?),
+    ("img3.jpg".to_string(), std::fs::read("img3.jpg")?),
+];
+
+let results = ImageFingerprinter::fingerprint_batch(&images);
+
+for (id, result) in results {
+    match result {
+        Ok(fp) => println!("{}: fingerprinted successfully", id),
+        Err(e) => println!("{}: error - {}", id, e),
+    }
+}
+```
+
+**Performance Note:** With the `parallel` feature enabled (default), batch processing uses all available CPU cores for 2-3x speedup.
+
+---
+
+### FingerprinterContext
+
+High-performance context for repeated fingerprinting with buffer reuse. Recommended for processing thousands of images.
+
+#### `new()`
+
+```rust
+pub fn new() -> Self
+```
+
+Creates a new context with cached resources.
+
+**Example:**
+```rust
+use imgfprint::FingerprinterContext;
+
+let mut ctx = FingerprinterContext::new();
+```
+
+#### `fingerprint()`
+
+```rust
+pub fn fingerprint(
+    &mut self,
+    image_bytes: &[u8]
+) -> Result<ImageFingerprint, ImgFprintError>
+```
+
+Computes fingerprint using internal buffer reuse.
+
+**Example:**
+```rust
+use imgfprint::FingerprinterContext;
+
+let mut ctx = FingerprinterContext::new();
+
+// Process thousands of images efficiently
+for path in image_paths {
+    let bytes = std::fs::read(path)?;
+    let fp = ctx.fingerprint(&bytes)?;
+    // Process fingerprint...
+}
+```
+
+**Performance:** Context API saves approximately 260KB of allocations per image compared to the static API. Essential for high-throughput scenarios (10M+ images/day).
+
+---
+
+### ImageFingerprint
+
+A perceptual fingerprint containing multiple hash layers for robust comparison.
+
+#### Accessors
+
+##### `exact_hash()`
+
+```rust
+pub fn exact_hash(&self) -> &[u8; 32]
+```
+
+Returns the SHA256 hash of original image bytes.
+
+**Use case:** Exact deduplication before perceptual comparison (much faster).
+
+**Example:**
+```rust
+let exact: &[u8; 32] = fp.exact_hash();
+
+// Convert to hex string
+let hex = hex::encode(exact);
+println!("Exact hash: {}", hex);
+```
+
+##### `global_phash()`
+
+```rust
+pub fn global_phash(&self) -> u64
+```
+
+Returns the global perceptual hash from the center 32x32 region.
+
+**Example:**
+```rust
+let phash: u64 = fp.global_phash();
+println!("Perceptual hash: {:016x}", phash);
+```
+
+##### `block_hashes()`
+
+```rust
+pub fn block_hashes(&self) -> &[u64; 16]
+```
+
+Returns 16 block-level hashes from a 4x4 grid.
+
+**Use case:** Crop-resistant comparison by matching partial regions.
+
+**Example:**
+```rust
+let blocks: &[u64; 16] = fp.block_hashes();
+
+// Access individual blocks
+for (i, hash) in blocks.iter().enumerate() {
+    println!("Block {}: {:016x}", i, hash);
+}
+```
+
+#### Comparison Methods
+
+##### `distance()`
+
+```rust
+pub fn distance(&self, other: &ImageFingerprint) -> u32
+```
+
+Computes Hamming distance between global hashes.
+
+**Returns:** 0 (identical) to 64 (completely different)
+
+**Example:**
+```rust
+let dist = fp1.distance(&fp2);
+println!("Hamming distance: {} (lower is more similar)", dist);
+
+// Convert to similarity percentage
+let similarity = 1.0 - (dist as f32 / 64.0);
+```
+
+##### `is_similar()`
+
+```rust
+pub fn is_similar(&self, other: &ImageFingerprint, threshold: f32) -> bool
+```
+
+Checks if this fingerprint is similar to another within a threshold.
+
+**Parameters:**
+- `other`: Fingerprint to compare against
+- `threshold`: Similarity threshold 0.0 to 1.0 (default: 0.8)
+
+**Example:**
+```rust
+// Check if images are 80% similar
+if fp1.is_similar(&fp2, 0.8) {
+    println!("Images are similar!");
+}
+
+// Stricter matching (90%)
+if fp1.is_similar(&fp2, 0.9) {
+    println!("Images are nearly identical!");
+}
+
+// Loose matching (50%)
+if fp1.is_similar(&fp2, 0.5) {
+    println!("Images share some visual elements");
+}
+```
+
+**Note:** A threshold of 1.0 requires exact match (both SHA256 and perceptual hash identical).
+
+---
+
+### Similarity
+
+Similarity score between two image fingerprints.
+
+#### Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `score` | `f32` | Similarity 0.0 (different) to 1.0 (identical) |
+| `exact_match` | `bool` | True if SHA256 hashes match |
+| `perceptual_distance` | `u32` | Hamming distance 0-64 |
+
+#### Methods
+
+##### `perfect()`
+
+```rust
+pub fn perfect() -> Self
+```
+
+Returns a perfect similarity score (1.0, exact match).
+
+**Example:**
+```rust
+let perfect = imgfprint::Similarity::perfect();
+assert_eq!(perfect.score, 1.0);
+assert!(perfect.exact_match);
+```
+
+---
+
+## Advanced Usage
+
+### Batch Processing
+
+Process thousands of images efficiently using two strategies:
+
+#### Strategy 1: Parallel Batch (Best for Many Images)
+
+Uses all CPU cores for maximum throughput:
+
+```rust
+use imgfprint::ImageFingerprinter;
+use std::path::Path;
+
+fn process_parallel(image_paths: &[&Path]) -> Result<(), Box<dyn std::error::Error>> {
+    let images: Vec<_> = image_paths
+        .iter()
+        .map(|p| (p.to_string_lossy().to_string(), std::fs::read(p).unwrap()))
+        .collect();
+    
+    let results = ImageFingerprinter::fingerprint_batch(&images);
+    
+    for (path, result) in results {
+        match result {
+            Ok(fp) => {
+                // Store in database, index, etc.
+                db.store(&path, fp)?;
+            }
+            Err(e) => eprintln!("Failed to process {}: {}", path, e),
+        }
+    }
+    
+    Ok(())
+}
+```
+
+**Speedup:** 2-3x on multi-core systems.
+
+#### Strategy 2: Streaming with Context (Best for Memory-Constrained)
+
+Lower memory usage, ideal for processing large datasets:
+
+```rust
+use imgfprint::FingerprinterContext;
+use std::path::Path;
+
+fn process_streaming(image_paths: &[&Path]) -> Result<(), Box<dyn std::error::Error>> {
+    let mut ctx = FingerprinterContext::new();
+    
+    for path in image_paths {
+        let bytes = std::fs::read(path)?;
+        let fp = ctx.fingerprint(&bytes)?;
+        db.store(&path.to_string_lossy(), fp)?;
+    }
+    
+    Ok(())
+}
+```
+
+**Benefit:** Minimal memory footprint, processes images one at a time.
+
+### Semantic Embeddings
+
+Work with CLIP-style semantic embeddings (requires custom provider implementation).
+
+#### Custom Provider Example
+
+```rust
+use imgfprint::{Embedding, EmbeddingProvider, ImgFprintError};
+
+struct MyClipProvider {
+    client: reqwest::Client,
+    api_key: String,
+}
+
+impl EmbeddingProvider for MyClipProvider {
+    fn embed(&self, image: &[u8]) -> Result<Embedding, ImgFprintError> {
+        let response = self.client
+            .post("https://api.example.com/embed")
+            .header("Authorization", &self.api_key)
+            .body(image.to_vec())
+            .send()
+            .map_err(|e| ImgFprintError::ProviderError(e.to_string()))?;
+        
+        let vector: Vec<f32> = response.json()
+            .map_err(|e| ImgFprintError::ProviderError(e.to_string()))?;
+        
+        Embedding::new(vector)
+    }
+}
+
+// Usage
+let provider = MyClipProvider { 
+    client: reqwest::Client::new(),
+    api_key: "your-api-key".to_string(),
+};
+
+let img1 = std::fs::read("cat.jpg")?;
+let img2 = std::fs::read("dog.jpg")?;
+
+let emb1 = provider.embed(&img1)?;
+let emb2 = provider.embed(&img2)?;
+
+let similarity = imgfprint::semantic_similarity(&emb1, &emb2)?;
+println!("Semantic similarity: {:.4}", similarity);
+```
+
+**Note:** The library does not include built-in embedding providers. You must implement `EmbeddingProvider` for your use case (OpenAI CLIP, HuggingFace, local models, etc.).
+
+#### Local ONNX Models
+
+With the `local-embedding` feature:
+
+```toml
+[dependencies]
+imgfprint = { version = "0.1.2", features = ["local-embedding"] }
+```
+
+```rust
+use imgfprint::{LocalProvider, LocalProviderConfig};
+
+// Load CLIP model
+let provider = LocalProvider::from_file("clip-vit-base-patch32.onnx")?;
+
+// Or with custom configuration
+let config = LocalProviderConfig::clip_vit_large_patch14();
+let provider = LocalProvider::from_file_with_config("clip.onnx", config)?;
+
+// Generate embedding
+let image = std::fs::read("photo.jpg")?;
+let embedding = provider.embed(&image)?;
+
+println!("Generated {}-dimensional embedding", embedding.len());
+```
+
+---
+
+## Error Handling
+
+All operations return `Result<T, ImgFprintError>`. The library never panics on malformed input.
+
+### Complete Error Handling Example
+
+```rust
+use imgfprint::{ImageFingerprinter, ImgFprintError};
+
+match ImageFingerprinter::fingerprint(&bytes) {
+    Ok(fp) => {
+        // Use fingerprint
+    }
+    
+    // Image-related errors
+    Err(ImgFprintError::InvalidImage(msg)) => {
+        eprintln!("Invalid image: {}", msg);
+    }
+    Err(ImgFprintError::UnsupportedFormat(msg)) => {
+        eprintln!("Unsupported format: {}", msg);
+    }
+    Err(ImgFprintError::DecodeError(msg)) => {
+        eprintln!("Decode failed: {}", msg);
+    }
+    Err(ImgFprintError::ImageTooSmall(msg)) => {
+        eprintln!("Image too small: {} (minimum 32x32)", msg);
+    }
+    
+    // Processing errors
+    Err(ImgFprintError::ProcessingError(msg)) => {
+        eprintln!("Processing error: {}", msg);
+    }
+    
+    // Embedding errors
+    Err(ImgFprintError::EmbeddingDimensionMismatch { expected, actual }) => {
+        eprintln!("Dimension mismatch: expected {}, got {}", expected, actual);
+    }
+    Err(ImgFprintError::ProviderError(msg)) => {
+        eprintln!("Provider error: {}", msg);
+    }
+    Err(ImgFprintError::InvalidEmbedding(msg)) => {
+        eprintln!("Invalid embedding: {}", msg);
+    }
+}
+```
+
+---
+
+## Performance Tips
+
+### 1. Use Context API for High Throughput
+
+**Avoid:** Creating new allocations for each image
+```rust
+// Slow: Allocates buffers for each image
+for path in paths {
+    let fp = ImageFingerprinter::fingerprint(&std::fs::read(path)?)?;
+}
+```
+
+**Prefer:** Buffer reuse with context
+```rust
+// Fast: Reuses buffers
+let mut ctx = FingerprinterContext::new();
+for path in paths {
+    let fp = ctx.fingerprint(&std::fs::read(path)?)?;
+}
+```
+
+**Savings:** ~260KB allocations per image eliminated.
+
+### 2. Use Batch Processing for Parallel Workloads
+
+```rust
+// Process 100 images in parallel using all CPU cores
+let results = ImageFingerprinter::fingerprint_batch(&images);
+```
+
+**Speedup:** 2-3x on multi-core systems.
+
+### 3. Check Exact Hash First
+
+```rust
+// Fast path: exact byte match (SHA256 comparison)
+if fp1.exact_hash() == fp2.exact_hash() {
+    return Similarity::perfect();
+}
+
+// Slow path: perceptual comparison (DCT-based)
+let sim = ImageFingerprinter::compare(&fp1, &fp2);
+```
+
+### 4. Handle Common Formats Efficiently
+
+Supported formats: PNG, JPEG, GIF, WebP, BMP
+
+| Format | Decode Speed | Best For |
+|--------|--------------|----------|
+| PNG | Fast | Synthetic images, screenshots |
+| JPEG | Medium | Photos (use `zune-jpeg` for 2-3x speedup) |
+| WebP | Slow | Web-optimized images |
+| GIF | Fast | Simple graphics |
+
+### 5. Image Size Guidelines
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| Minimum | 32x32 pixels | Enforced |
+| Maximum | 8192x8192 pixels | OOM protection |
+| Optimal | 256x512 to 1024x1024 | Best performance |
+
+**Note:** Larger images are downscaled to 256x256 internally, so feeding very large images wastes decode time.
+
+---
+
+## Feature Flags
+
+Configure the library for your needs:
+
+```toml
+[dependencies]
+# Minimal build (no parallel processing)
+imgfprint = { version = "0.1.2", default-features = false }
+
+# Default (serialization + parallel processing)
+imgfprint = "0.1.2"
+
+# With local ONNX inference
+imgfprint = { version = "0.1.2", features = ["local-embedding"] }
+```
+
+### Available Features
+
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `serde` | Yes | Serialization support (JSON, binary) via serde |
+| `parallel` | Yes | Parallel batch processing using rayon |
+| `local-embedding` | No | Local ONNX model inference for embeddings |
+
+---
+
+## License
+
+MIT License - See LICENSE file for details.
+
+## Links
+
+- [Crates.io](https://crates.io/crates/imgfprint)
+- [Documentation](https://docs.rs/imgfprint)
+- [Repository](https://github.com/themankindproject/imgfprint-rs)

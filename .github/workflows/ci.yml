@@ -24,7 +24,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run tests (release)
-        run: cargo test --all-features --release --verbose
+        run: cargo test --all-features --release 
 
   clippy:
     name: Clippy
@@ -84,11 +84,9 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Build debug
-        run: cargo build --all-features --verbose
 
       - name: Build release
-        run: cargo build --all-features --release --verbose
+        run: cargo build --all-features --release 
 
   fuzz:
     name: Fuzz
