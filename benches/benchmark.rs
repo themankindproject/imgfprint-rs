@@ -1,5 +1,6 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use imgfprint::ImageFingerprinter;
+use std::hint::black_box;
 
 fn create_test_image() -> Vec<u8> {
     use image::{ImageBuffer, Rgb};
