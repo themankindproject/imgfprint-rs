@@ -15,7 +15,7 @@ High-performance image fingerprinting library for Rust with **perceptual hashing
 | Method | Use Case | Speed | Precision |
 |--------|----------|-------|-----------|
 | **SHA256** | Exact deduplication | ~1ms | 100% exact |
-| **pHash** | Perceptual similarity | ~2ms | Resilient to compression, resizing |
+| **pHash** | Perceptual similarity | ~1.5ms | Resilient to compression, resizing |
 | **Semantic** | Content understanding | Local or API | Captures visual meaning |
 
 Perfect for:
@@ -43,7 +43,7 @@ Perfect for:
 
 ```toml
 [dependencies]
-imgfprint = "0.1.2"
+imgfprint = "0.1.3"
 ```
 
 ### Feature Flags
@@ -57,13 +57,13 @@ imgfprint = "0.1.2"
 Minimal build (no parallel processing):
 ```toml
 [dependencies]
-imgfprint = { version = "0.1.2", default-features = false }
+imgfprint = { version = "0.1.3", default-features = false }
 ```
 
 With local embeddings (requires ONNX model):
 ```toml
 [dependencies]
-imgfprint = { version = "0.1.2", features = ["local-embedding"] }
+imgfprint = { version = "0.1.3", features = ["local-embedding"] }
 ```
 
 ## Quick Start

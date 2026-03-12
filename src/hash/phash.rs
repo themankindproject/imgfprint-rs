@@ -93,6 +93,7 @@ pub fn compute_phash(pixels: &[f32; DCT_SIZE * DCT_SIZE]) -> u64 {
 }
 
 /// Computes pHash from a 64x64 block by downsampling to 32x32 first.
+#[inline]
 pub fn compute_phash_from_64x64(block: &[f32; 64 * 64]) -> u64 {
     let mut downsampled = [0.0f32; DCT_SIZE * DCT_SIZE];
     const DOWNSAMPLE_FACTOR: f32 = 1.0 / 4.0;
@@ -129,8 +130,8 @@ pub fn compute_phash_from_64x64(block: &[f32; 64 * 64]) -> u64 {
 fn compute_hash_from_coeffs(coeffs: &[f32; TOTAL_HASH_ELEMENTS]) -> u64 {
     let mut indexed: [(usize, f32); TOTAL_HASH_ELEMENTS] = std::array::from_fn(|i| (i, coeffs[i]));
 
-    indexed.sort_by(
-        |(idx_a, val_a), (idx_b, val_b)| match (val_a.is_nan(), val_b.is_nan()) {
+    indexed.sort_unstable_by(|(idx_a, val_a), (idx_b, val_b)| {
+        match (val_a.is_nan(), val_b.is_nan()) {
             (true, true) => idx_a.cmp(idx_b),
             (true, false) => std::cmp::Ordering::Greater,
             (false, true) => std::cmp::Ordering::Less,
@@ -139,8 +140,8 @@ fn compute_hash_from_coeffs(coeffs: &[f32; TOTAL_HASH_ELEMENTS]) -> u64 {
                 Some(ordering) => ordering,
                 None => idx_a.cmp(idx_b),
             },
-        },
-    );
+        }
+    });
 
     let median = indexed[TOTAL_HASH_ELEMENTS / 2].1;
 

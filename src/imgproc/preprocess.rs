@@ -9,6 +9,19 @@ const NORMALIZED_SIZE: u32 = 256;
 const BLOCK_SIZE: u32 = 64;
 const PHASH_SIZE: u32 = 32;
 
+// Compile-time assertions to ensure constants are valid
+const _: () = assert!(NORMALIZED_SIZE == 256, "NORMALIZED_SIZE must be 256");
+const _: () = assert!(BLOCK_SIZE == 64, "BLOCK_SIZE must be 64");
+const _: () = assert!(PHASH_SIZE == 32, "PHASH_SIZE must be 32");
+const _: () = assert!(
+    BLOCK_SIZE * 4 == NORMALIZED_SIZE,
+    "4 blocks must fit in normalized size"
+);
+const _: () = assert!(
+    PHASH_SIZE * 8 == NORMALIZED_SIZE,
+    "PHASH_SIZE must divide evenly"
+);
+
 /// Preprocessor with cached resizer and CPU extension detection.
 pub struct Preprocessor {
     resizer: Resizer,
@@ -76,9 +89,13 @@ impl Preprocessor {
             .map_err(|e| ImgFprintError::ProcessingError(format!("invalid source image: {}", e)))?;
 
         // Reuse destination buffer to avoid allocation
-        self.dst_buffer.clear();
-        self.dst_buffer
-            .resize((NORMALIZED_SIZE * NORMALIZED_SIZE * 3) as usize, 0);
+        #[allow(clippy::uninit_vec)]
+        unsafe {
+            self.dst_buffer.clear();
+            let target_len = (NORMALIZED_SIZE * NORMALIZED_SIZE * 3) as usize;
+            self.dst_buffer.reserve(target_len);
+            self.dst_buffer.set_len(target_len);
+        }
         let dst_buffer = std::mem::take(&mut self.dst_buffer);
 
         let mut dst = Image::from_vec_u8(
@@ -104,10 +121,14 @@ impl Preprocessor {
         // Reclaim buffer for reuse
         self.dst_buffer = rgb_bytes;
 
-        // Reuse grayscale buffer - clear and resize
-        self.gray_buffer.clear();
-        self.gray_buffer
-            .resize((NORMALIZED_SIZE * NORMALIZED_SIZE) as usize, 0);
+        // Reuse grayscale buffer
+        #[allow(clippy::uninit_vec)]
+        unsafe {
+            self.gray_buffer.clear();
+            let gray_target_len = (NORMALIZED_SIZE * NORMALIZED_SIZE) as usize;
+            self.gray_buffer.reserve(gray_target_len);
+            self.gray_buffer.set_len(gray_target_len);
+        }
 
         for i in (0..self.dst_buffer.len()).step_by(3) {
             let r = self.dst_buffer[i] as u32;
@@ -116,13 +137,13 @@ impl Preprocessor {
             self.gray_buffer[i / 3] = ((77 * r + 150 * g + 29 * b) >> 8) as u8;
         }
 
-        GrayImage::from_raw(
-            NORMALIZED_SIZE,
-            NORMALIZED_SIZE,
-            std::mem::take(&mut self.gray_buffer),
-        )
-        .ok_or_else(|| {
-            ImgFprintError::ProcessingError("failed to create grayscale image".to_string())
+        let gray_buffer = std::mem::take(&mut self.gray_buffer);
+        debug_assert_eq!(
+            gray_buffer.len(),
+            (NORMALIZED_SIZE * NORMALIZED_SIZE) as usize
+        );
+        Ok(unsafe {
+            GrayImage::from_raw(NORMALIZED_SIZE, NORMALIZED_SIZE, gray_buffer).unwrap_unchecked()
         })
     }
 }

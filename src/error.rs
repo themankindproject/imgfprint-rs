@@ -39,3 +39,23 @@ pub enum ImgFprintError {
     #[error("invalid embedding: {0}")]
     InvalidEmbedding(String),
 }
+
+impl ImgFprintError {
+    #[cold]
+    #[inline(never)]
+    pub fn decode_error(msg: impl Into<String>) -> Self {
+        Self::DecodeError(msg.into())
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub fn invalid_image(msg: impl Into<String>) -> Self {
+        Self::InvalidImage(msg.into())
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub fn processing_error(msg: impl Into<String>) -> Self {
+        Self::ProcessingError(msg.into())
+    }
+}

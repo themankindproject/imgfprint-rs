@@ -75,8 +75,10 @@ impl ImageFingerprint {
     ///     println!("Images are similar!");
     /// }
     /// ```
+    #[doc(alias = "compare")]
+    #[doc(alias = "match")]
     pub fn is_similar(&self, other: &ImageFingerprint, threshold: f32) -> bool {
-        assert!(
+        debug_assert!(
             (0.0..=1.0).contains(&threshold),
             "threshold must be in range [0.0, 1.0], got {}",
             threshold

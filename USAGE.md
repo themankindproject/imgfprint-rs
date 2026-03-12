@@ -495,6 +495,21 @@ println!("Generated {}-dimensional embedding", embedding.len());
 
 All operations return `Result<T, ImgFprintError>`. The library never panics on malformed input.
 
+### Creating Errors (For SDK Users)
+
+When implementing custom providers or extending the library, use the optimized error constructors:
+
+```rust
+use imgfprint::ImgFprintError;
+
+let err = ImgFprintError::decode_error("invalid format");
+let err = ImgFprintError::invalid_image("dimensions too large");
+let err = ImgFprintError::processing_error("resize failed");
+
+let size = 1024;
+let err = ImgFprintError::invalid_image(format!("image too large: {} bytes", size));
+```
+
 ### Complete Error Handling Example
 
 ```rust
