@@ -14,7 +14,7 @@ readme = "README.md"
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 fast_image_resize = { version = "6.0", features = ["image"] }
-sha2 = "0.10"
+blake3 = "1.8"
 realfft = "3.4"
 rustfft = "6.2"
 thiserror = "2.0"

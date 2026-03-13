@@ -14,7 +14,7 @@ High-performance image fingerprinting library for Rust with **multi-algorithm pe
 
 | Method | Use Case | Speed | Precision |
 |--------|----------|-------|-----------|
-| **SHA256** | Exact deduplication | ~1ms | 100% exact |
+| **BLAKE3** | Exact deduplication | ~0.2ms | 100% exact |
 | **PHash** | Perceptual similarity | ~1.5ms | DCT-based, resilient to compression |
 | **DHash** | Structural similarity | ~0.5ms | Gradient-based, good for crops |
 | **Multi** | Combined accuracy | ~1.8ms | Weighted PHash+DHash (60/40) |
@@ -31,7 +31,7 @@ Perfect for:
 
 - **Multi-Algorithm Support** - PHash (DCT-based) + DHash (gradient-based) with weighted combination
 - **Deterministic Output** - Same input always produces same fingerprint
-- **SHA256 Exact Hash** - Byte-identical detection
+- **BLAKE3 Exact Hash** - Byte-identical detection (6-8x faster than SHA256)
 - **Block-Level Hashing** - 4x4 grid for crop resistance
 - **Semantic Embeddings** - CLIP-style vector representations via external providers or local ONNX models
 - **SIMD Acceleration** - AVX2/NEON optimized resizing
@@ -123,7 +123,7 @@ Contains both PHash and DHash for enhanced accuracy:
 
 ```
 MultiHashFingerprint
-├── exact:       [u8; 32]     // SHA256 of original bytes
+├── exact:       [u8; 32]     // BLAKE3 of original bytes
 ├── phash:       ImageFingerprint  // PHash results
 │   ├── global_phash: u64
 │   └── block_hashes: [u64; 16]
@@ -136,7 +136,7 @@ MultiHashFingerprint
 
 ```
 ImageFingerprint
-├── exact:       [u8; 32]     // SHA256 of original bytes
+├── exact:       [u8; 32]     // BLAKE3 of original bytes
 ├── global_phash: u64         // Algorithm-specific hash (center 32x32)
 └── block_hashes: [u64; 16]   // Block-level hashes (4x4 grid, 64x64 each)
 ```
@@ -149,7 +149,7 @@ ImageFingerprint
 4. **Parallel Hash Computation** - Both algorithms computed simultaneously:
    - **PHash**: DCT-based, center 32x32 + 4x4 blocks
    - **DHash**: Gradient-based, resample to 9x8
-5. **Exact Hash** - SHA256 of original bytes
+5. **Exact Hash** - BLAKE3 of original bytes
 
 ### Multi-Algorithm Comparison
 
@@ -188,14 +188,14 @@ cargo bench
 - **OOM Protection**: Maximum image size 8192x8192 pixels (configurable)
 - **Deterministic Output**: Same input always produces same output
 - **No Panics**: All error conditions return `Result`
-- **Constant-Time Hashing**: SHA256 computation
+- **Fast Hashing**: BLAKE3 computation (6-8x faster than SHA256)
 - **Input Validation**: Comprehensive format and size validation
 
 ## Comparison with Alternatives
 
 | Feature | imgfprint-rs | imagehash | img_hash |
 |---------|-------------|-----------|----------|
-| SHA256 exact | Yes | No | No |
+| BLAKE3 exact | Yes | No | No |
 | PHash | Yes | Yes | Yes |
 | DHash | Yes | Yes | Yes |
 | Multi-algorithm | Yes | No | No |

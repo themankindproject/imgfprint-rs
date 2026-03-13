@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced SHA2 with BLAKE3 for exact hashing
+  - 6-8x faster hashing performance
+  - Still provides 32-byte exact match hashes
+
 ## [0.2.0] - 2025-03-13
 
 ### Added

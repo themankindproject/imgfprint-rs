@@ -31,7 +31,7 @@ impl ImageFingerprint {
         }
     }
 
-    /// Returns the SHA256 hash of the original image bytes.
+    /// Returns the BLAKE3 hash of the original image bytes.
     ///
     /// Two images with identical byte content will have matching exact hashes.
     /// Use this for exact deduplication before perceptual comparison.
@@ -123,7 +123,7 @@ impl MultiHashFingerprint {
         }
     }
 
-    /// Returns the SHA256 hash of the original image bytes.
+    /// Returns the BLAKE3 hash of the original image bytes.
     #[inline]
     pub fn exact_hash(&self) -> &[u8; 32] {
         &self.exact

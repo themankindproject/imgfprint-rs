@@ -13,7 +13,7 @@ pub struct Similarity {
     /// Values below 0.3 indicate substantially different images.
     pub score: f32,
 
-    /// True if the images have identical SHA256 hashes (exact byte match).
+    /// True if the images have identical BLAKE3 hashes (exact byte match).
     pub exact_match: bool,
 
     /// Hamming distance between global perceptual hashes (0-64).

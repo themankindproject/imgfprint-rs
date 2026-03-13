@@ -6,7 +6,7 @@ use crate::hash::dhash::{compute_dhash, compute_dhash_from_64x64};
 use crate::hash::phash::{compute_phash, compute_phash_from_64x64};
 use crate::imgproc::decode::decode_image;
 use crate::imgproc::preprocess::{extract_blocks, extract_global_region, Preprocessor};
-use sha2::{Digest, Sha256};
+use blake3::Hasher;
 use std::cell::RefCell;
 
 /// Context for high-performance fingerprinting with buffer reuse.
@@ -15,7 +15,7 @@ use std::cell::RefCell;
 /// to minimize allocations in high-throughput scenarios.
 pub struct FingerprinterContext {
     preprocessor: Preprocessor,
-    sha_hasher: Sha256,
+    sha_hasher: Hasher,
 }
 
 impl Default for FingerprinterContext {
@@ -29,7 +29,7 @@ impl FingerprinterContext {
     pub fn new() -> Self {
         Self {
             preprocessor: Preprocessor::new(),
-            sha_hasher: Sha256::new(),
+            sha_hasher: Hasher::new(),
         }
     }
 
@@ -61,7 +61,7 @@ impl FingerprinterContext {
     ) -> Result<MultiHashFingerprint, ImgFprintError> {
         self.sha_hasher.reset();
         self.sha_hasher.update(image_bytes);
-        let exact_hash: [u8; 32] = self.sha_hasher.finalize_reset().into();
+        let exact_hash: [u8; 32] = *self.sha_hasher.finalize().as_bytes();
 
         let image = decode_image(image_bytes)?;
         let normalized = self.preprocessor.normalize(&image)?;
@@ -106,7 +106,7 @@ impl FingerprinterContext {
     ) -> Result<ImageFingerprint, ImgFprintError> {
         self.sha_hasher.reset();
         self.sha_hasher.update(image_bytes);
-        let exact_hash: [u8; 32] = self.sha_hasher.finalize_reset().into();
+        let exact_hash: [u8; 32] = *self.sha_hasher.finalize().as_bytes();
 
         let image = decode_image(image_bytes)?;
         let normalized = self.preprocessor.normalize(&image)?;
