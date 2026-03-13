@@ -1,3 +1,12 @@
+use crate::core::similarity::Similarity;
+use crate::hash::algorithms::HashAlgorithm;
+
+/// Weights for weighted combination of algorithm similarities.
+///
+/// Default: PHash 60%, DHash 40%
+const PHASH_WEIGHT: f32 = 0.6;
+const DHASH_WEIGHT: f32 = 0.4;
+
 /// A perceptual fingerprint containing multiple hash layers for robust comparison.
 ///
 /// Fingerprints are deterministic and comparable across platforms. The structure
@@ -89,5 +98,100 @@ impl ImageFingerprint {
         let dist = self.distance(other);
         let similarity = 1.0 - (dist as f32 / 64.0);
         similarity >= threshold
+    }
+}
+
+/// A multi-algorithm fingerprint containing hashes from multiple perceptual algorithms.
+///
+/// Provides enhanced similarity detection by combining results from multiple
+/// hash algorithms with weighted combination for improved accuracy.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct MultiHashFingerprint {
+    pub(crate) exact: [u8; 32],
+    pub(crate) phash: ImageFingerprint,
+    pub(crate) dhash: ImageFingerprint,
+}
+
+impl MultiHashFingerprint {
+    pub(crate) fn new(exact: [u8; 32], phash: ImageFingerprint, dhash: ImageFingerprint) -> Self {
+        Self {
+            exact,
+            phash,
+            dhash,
+        }
+    }
+
+    /// Returns the SHA256 hash of the original image bytes.
+    #[inline]
+    pub fn exact_hash(&self) -> &[u8; 32] {
+        &self.exact
+    }
+
+    /// Returns the PHash-based fingerprint.
+    #[inline]
+    pub fn phash(&self) -> &ImageFingerprint {
+        &self.phash
+    }
+
+    /// Returns the DHash-based fingerprint.
+    #[inline]
+    pub fn dhash(&self) -> &ImageFingerprint {
+        &self.dhash
+    }
+
+    /// Returns the fingerprint for a specific algorithm.
+    pub fn get(&self, algorithm: HashAlgorithm) -> &ImageFingerprint {
+        match algorithm {
+            HashAlgorithm::PHash => &self.phash,
+            HashAlgorithm::DHash => &self.dhash,
+        }
+    }
+
+    /// Compares two multi-hash fingerprints using weighted combination.
+    ///
+    /// Uses PHash (60%) and DHash (40%) weights to compute overall similarity.
+    /// Returns a Similarity struct with combined score and component distances.
+    ///
+    /// # Arguments
+    /// * `other` - The fingerprint to compare against
+    pub fn compare(&self, other: &MultiHashFingerprint) -> Similarity {
+        if self.exact == other.exact {
+            return Similarity {
+                score: 1.0,
+                exact_match: true,
+                perceptual_distance: 0,
+            };
+        }
+
+        let phash_dist = self.phash.distance(&other.phash);
+        let dhash_dist = self.dhash.distance(&other.dhash);
+
+        let phash_sim = 1.0 - (phash_dist as f32 / 64.0);
+        let dhash_sim = 1.0 - (dhash_dist as f32 / 64.0);
+
+        let weighted_score = phash_sim * PHASH_WEIGHT + dhash_sim * DHASH_WEIGHT;
+
+        let avg_distance =
+            ((phash_dist as f32 * PHASH_WEIGHT) + (dhash_dist as f32 * DHASH_WEIGHT)) as u32;
+
+        Similarity {
+            score: weighted_score.clamp(0.0, 1.0),
+            exact_match: false,
+            perceptual_distance: avg_distance,
+        }
+    }
+
+    /// Checks if this fingerprint is similar to another within a threshold.
+    ///
+    /// Uses the weighted combination score from compare().
+    pub fn is_similar(&self, other: &MultiHashFingerprint, threshold: f32) -> bool {
+        debug_assert!(
+            (0.0..=1.0).contains(&threshold),
+            "threshold must be in range [0.0, 1.0], got {}",
+            threshold
+        );
+        self.compare(other).score >= threshold
     }
 }
