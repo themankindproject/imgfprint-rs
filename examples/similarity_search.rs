@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if let Ok(bytes) = fs::read(path.path()) {
             if let Ok(fp) = ImageFingerprinter::fingerprint(&bytes) {
-                let sim = ImageFingerprinter::compare(&query_fp, &fp);
+                let sim = query_fp.compare(&fp);
 
                 if sim.score >= threshold {
                     matches.push((name, sim.score));

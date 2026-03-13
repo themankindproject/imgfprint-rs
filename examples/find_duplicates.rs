@@ -1,4 +1,4 @@
-use imgfprint::ImageFingerprinter;
+use imgfprint::{HashAlgorithm, ImageFingerprinter};
 use std::collections::HashMap;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -31,16 +31,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .to_string();
 
             match std::fs::read(&path) {
-                Ok(bytes) => match ImageFingerprinter::fingerprint(&bytes) {
-                    Ok(fp) => {
-                        let hash = fp.global_phash();
-                        fingerprints
-                            .entry(format!("{:016x}", hash))
-                            .or_default()
-                            .push((filename, hash));
+                Ok(bytes) => {
+                    match ImageFingerprinter::fingerprint_with(&bytes, HashAlgorithm::PHash) {
+                        Ok(fp) => {
+                            let hash = fp.global_phash();
+                            fingerprints
+                                .entry(format!("{:016x}", hash))
+                                .or_default()
+                                .push((filename, hash));
+                        }
+                        Err(e) => eprintln!("Error fingerprinting {}: {}", filename, e),
                     }
-                    Err(e) => eprintln!("Error fingerprinting {}: {}", filename, e),
-                },
+                }
                 Err(e) => eprintln!("Error reading {}: {}", filename, e),
             }
         }

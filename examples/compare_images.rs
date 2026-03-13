@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fp1 = ImageFingerprinter::fingerprint(&img1)?;
     let fp2 = ImageFingerprinter::fingerprint(&img2)?;
 
-    let sim = ImageFingerprinter::compare(&fp1, &fp2);
+    let sim = fp1.compare(&fp2);
 
     println!("Image 1: {}", args[1]);
     println!("Image 2: {}", args[2]);
@@ -24,11 +24,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Perceptual Distance: {}", sim.perceptual_distance);
 
     if sim.score > 0.8 {
-        println!("\n✓ Images are very similar!");
+        println!("\nImages are very similar!");
     } else if sim.score > 0.5 {
-        println!("\n✓ Images are somewhat similar.");
+        println!("\nImages are somewhat similar.");
     } else {
-        println!("\n✗ Images are different.");
+        println!("\nImages are different.");
     }
 
     Ok(())

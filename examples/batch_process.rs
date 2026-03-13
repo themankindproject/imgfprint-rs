@@ -50,7 +50,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output_data.push(serde_json::json!({
                 "filename": name,
                 "exact_hash": exact_hash,
-                "global_phash": format!("{:016x}", fp.global_phash()),
+                "global_phash": format!("{:016x}", fp.phash().global_phash()),
+                "global_dhash": format!("{:016x}", fp.dhash().global_phash()),
             }));
         }
     }
