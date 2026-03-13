@@ -131,12 +131,11 @@ impl FingerprinterContext {
         #[cfg(feature = "parallel")]
         let block_hashes = {
             use rayon::prelude::*;
-            blocks
-                .par_iter()
-                .map(compute_phash_from_64x64)
-                .collect::<Vec<_>>()
-                .try_into()
-                .expect("always 16 elements")
+            let mut hashes = [0u64; 16];
+            hashes.par_iter_mut().enumerate().for_each(|(i, hash)| {
+                *hash = compute_phash_from_64x64(&blocks[i]);
+            });
+            hashes
         };
 
         #[cfg(not(feature = "parallel"))]
@@ -160,12 +159,11 @@ impl FingerprinterContext {
         #[cfg(feature = "parallel")]
         let block_hashes = {
             use rayon::prelude::*;
-            blocks
-                .par_iter()
-                .map(compute_dhash_from_64x64)
-                .collect::<Vec<_>>()
-                .try_into()
-                .expect("always 16 elements")
+            let mut hashes = [0u64; 16];
+            hashes.par_iter_mut().enumerate().for_each(|(i, hash)| {
+                *hash = compute_dhash_from_64x64(&blocks[i]);
+            });
+            hashes
         };
 
         #[cfg(not(feature = "parallel"))]

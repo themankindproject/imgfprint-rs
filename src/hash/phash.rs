@@ -2,6 +2,7 @@
 
 use realfft::RealFftPlanner;
 use rustfft::num_complex::Complex32;
+use std::cell::RefCell;
 use std::sync::{Arc, OnceLock};
 
 const HASH_SIZE: usize = 8;
@@ -10,6 +11,13 @@ const TOTAL_HASH_ELEMENTS: usize = HASH_SIZE * HASH_SIZE;
 
 // Cached FFT planner for 32-point real FFT
 static FFT_PLAN_32: OnceLock<Arc<dyn realfft::RealToComplex<f32>>> = OnceLock::new();
+
+// Thread-local buffers for DCT to avoid repeated stack allocations
+thread_local! {
+    static DCT_BUFFERS: RefCell<([f32; 32], [Complex32; 17])> = const { RefCell::new(
+        ([0.0f32; 32], [Complex32::new(0.0, 0.0); 17])
+    ) };
+}
 
 /// Gets or creates the cached 32-point real FFT plan.
 fn get_fft_plan() -> Arc<dyn realfft::RealToComplex<f32>> {
@@ -25,32 +33,37 @@ fn get_fft_plan() -> Arc<dyn realfft::RealToComplex<f32>> {
 ///
 /// Uses the algorithm: DCT-II(x) = 2 * Re{FFT(y)} where y is a permuted version of x.
 /// This is more efficient than direct DCT and leverages SIMD-accelerated FFT.
+///
+/// Uses thread-local buffers to avoid repeated stack allocations.
 #[inline(always)]
 fn dct2_32(input: &[f32], output: &mut [f32]) {
     debug_assert_eq!(input.len(), 32);
     debug_assert_eq!(output.len(), 32);
 
     let fft = get_fft_plan();
-    let mut buffer = [0.0f32; 32];
-    let mut complex_buffer = [Complex32::new(0.0, 0.0); 17]; // N/2 + 1 for real FFT
 
-    // Input permutation for DCT-II via FFT
-    for i in 0..16 {
-        buffer[i] = input[i * 2];
-        buffer[31 - i] = input[i * 2 + 1];
-    }
+    DCT_BUFFERS.with(|buffers| {
+        let mut buffers = buffers.borrow_mut();
+        let (buffer, complex_buffer) = &mut *buffers;
 
-    // Forward FFT
-    fft.process(&mut buffer, &mut complex_buffer).unwrap();
+        // Input permutation for DCT-II via FFT
+        for i in 0..16 {
+            buffer[i] = input[i * 2];
+            buffer[31 - i] = input[i * 2 + 1];
+        }
 
-    // Extract real part and scale
-    const SCALE: f32 = 2.0 / 32.0;
-    output[0] = complex_buffer[0].re * SCALE;
-    #[allow(clippy::needless_range_loop)]
-    for i in 1..32 {
-        let k = i.min(32 - i);
-        output[i] = complex_buffer[k].re * SCALE;
-    }
+        // Forward FFT
+        fft.process(buffer, complex_buffer).unwrap();
+
+        // Extract real part and scale
+        const SCALE: f32 = 2.0 / 32.0;
+        output[0] = complex_buffer[0].re * SCALE;
+        #[allow(clippy::needless_range_loop)]
+        for i in 1..32 {
+            let k = i.min(32 - i);
+            output[i] = complex_buffer[k].re * SCALE;
+        }
+    });
 }
 
 /// Computes perceptual hash from a 32x32 grayscale buffer.
@@ -116,8 +129,8 @@ pub fn compute_phash_from_64x64(block: &[f32; 64 * 64]) -> u64 {
 
 /// Computes hash from DCT coefficients using median thresholding.
 ///
-/// Uses deterministic sorting with index-based tie-breaking to ensure
-/// consistent hash generation across platforms and compiler optimizations.
+/// Uses linear-time selection algorithm (nth_element) for optimal performance.
+/// Falls back to sorting for NaN handling to ensure deterministic results.
 ///
 /// # Bit Ordering
 /// The resulting 64-bit hash uses the following bit layout:
@@ -128,22 +141,39 @@ pub fn compute_phash_from_64x64(block: &[f32; 64 * 64]) -> u64 {
 /// highest bit position for intuitive comparison.
 #[inline(always)]
 fn compute_hash_from_coeffs(coeffs: &[f32; TOTAL_HASH_ELEMENTS]) -> u64 {
-    let mut indexed: [(usize, f32); TOTAL_HASH_ELEMENTS] = std::array::from_fn(|i| (i, coeffs[i]));
+    // Fast path: check if any NaN values exist
+    let has_nan = coeffs.iter().any(|v| v.is_nan());
 
-    indexed.sort_unstable_by(|(idx_a, val_a), (idx_b, val_b)| {
-        match (val_a.is_nan(), val_b.is_nan()) {
-            (true, true) => idx_a.cmp(idx_b),
-            (true, false) => std::cmp::Ordering::Greater,
-            (false, true) => std::cmp::Ordering::Less,
-            (false, false) => match val_a.partial_cmp(val_b) {
-                Some(std::cmp::Ordering::Equal) => idx_a.cmp(idx_b),
-                Some(ordering) => ordering,
-                None => idx_a.cmp(idx_b),
-            },
-        }
-    });
+    let median = if has_nan {
+        // Fallback: sort to handle NaN values deterministically
+        let mut indexed: [(usize, f32); TOTAL_HASH_ELEMENTS] =
+            std::array::from_fn(|i| (i, coeffs[i]));
 
-    let median = indexed[TOTAL_HASH_ELEMENTS / 2].1;
+        indexed.sort_unstable_by(|(idx_a, val_a), (idx_b, val_b)| {
+            match (val_a.is_nan(), val_b.is_nan()) {
+                (true, true) => idx_a.cmp(idx_b),
+                (true, false) => std::cmp::Ordering::Greater,
+                (false, true) => std::cmp::Ordering::Less,
+                (false, false) => match val_a.partial_cmp(val_b) {
+                    Some(std::cmp::Ordering::Equal) => idx_a.cmp(idx_b),
+                    Some(ordering) => ordering,
+                    None => idx_a.cmp(idx_b),
+                },
+            }
+        });
+
+        indexed[TOTAL_HASH_ELEMENTS / 2].1
+    } else {
+        // Fast path: use selection algorithm (O(n) instead of O(n log n))
+        let mut coeffs_copy = *coeffs;
+        let median_idx = TOTAL_HASH_ELEMENTS / 2;
+
+        *coeffs_copy
+            .select_nth_unstable_by(median_idx, |a, b| {
+                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .1
+    };
 
     coeffs
         .iter()
