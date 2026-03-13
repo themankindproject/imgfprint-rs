@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use imgfprint::ImageFingerprinter;
+use imgfprint::{HashAlgorithm, ImageFingerprinter};
 use std::hint::black_box;
 
 fn create_test_image() -> Vec<u8> {
@@ -28,12 +28,28 @@ fn create_test_image_size(width: u32, height: u32) -> Vec<u8> {
     buf
 }
 
-fn benchmark_fingerprint(c: &mut Criterion) {
+fn benchmark_fingerprint_multi(c: &mut Criterion) {
     let img = create_test_image();
 
-    c.bench_function("fingerprint_single", |b| {
+    c.bench_function("fingerprint_multi", |b| {
         b.iter(|| {
             let _ = ImageFingerprinter::fingerprint(black_box(&img));
+        })
+    });
+}
+
+fn benchmark_fingerprint_single(c: &mut Criterion) {
+    let img = create_test_image();
+
+    c.bench_function("fingerprint_single_phash", |b| {
+        b.iter(|| {
+            let _ = ImageFingerprinter::fingerprint_with(black_box(&img), HashAlgorithm::PHash);
+        })
+    });
+
+    c.bench_function("fingerprint_single_dhash", |b| {
+        b.iter(|| {
+            let _ = ImageFingerprinter::fingerprint_with(black_box(&img), HashAlgorithm::DHash);
         })
     });
 }
@@ -43,7 +59,19 @@ fn benchmark_compare(c: &mut Criterion) {
     let fp1 = ImageFingerprinter::fingerprint(&img).unwrap();
     let fp2 = ImageFingerprinter::fingerprint(&img).unwrap();
 
-    c.bench_function("compare_fingerprints", |b| {
+    c.bench_function("compare_multi", |b| {
+        b.iter(|| {
+            let _ = fp1.compare(black_box(&fp2));
+        })
+    });
+}
+
+fn benchmark_compare_single(c: &mut Criterion) {
+    let img = create_test_image();
+    let fp1 = ImageFingerprinter::fingerprint_with(&img, HashAlgorithm::PHash).unwrap();
+    let fp2 = ImageFingerprinter::fingerprint_with(&img, HashAlgorithm::PHash).unwrap();
+
+    c.bench_function("compare_single", |b| {
         b.iter(|| {
             let _ = ImageFingerprinter::compare(black_box(&fp1), black_box(&fp2));
         })
@@ -62,7 +90,30 @@ fn benchmark_batch(c: &mut Criterion) {
     });
 }
 
-// Component benchmarks - measure individual pipeline stages
+fn benchmark_batch_single(c: &mut Criterion) {
+    let images: Vec<_> = (0..10)
+        .map(|i| (format!("img{}", i), create_test_image()))
+        .collect();
+
+    c.bench_function("fingerprint_batch_phash_10", |b| {
+        b.iter(|| {
+            let _ = ImageFingerprinter::fingerprint_batch_with(
+                black_box(&images),
+                HashAlgorithm::PHash,
+            );
+        })
+    });
+
+    c.bench_function("fingerprint_batch_dhash_10", |b| {
+        b.iter(|| {
+            let _ = ImageFingerprinter::fingerprint_batch_with(
+                black_box(&images),
+                HashAlgorithm::DHash,
+            );
+        })
+    });
+}
+
 fn benchmark_decode(c: &mut Criterion) {
     let img = create_test_image();
 
@@ -77,7 +128,6 @@ fn benchmark_resize(c: &mut Criterion) {
     use fast_image_resize::images::Image;
     use fast_image_resize::{FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer};
 
-    // Create a 1024x1024 test image
     let img_bytes = create_test_image_size(1024, 1024);
     let img = image::load_from_memory(&img_bytes).unwrap();
     let rgb_img = img.to_rgb8();
@@ -100,7 +150,6 @@ fn benchmark_resize(c: &mut Criterion) {
 }
 
 fn benchmark_grayscale(c: &mut Criterion) {
-    // Simulate 256x256 RGB buffer
     let rgb_bytes: Vec<u8> = (0..(256 * 256 * 3)).map(|i| (i % 256) as u8).collect();
 
     c.bench_function("grayscale_only", |b| {
@@ -119,29 +168,27 @@ fn benchmark_grayscale(c: &mut Criterion) {
     });
 }
 
-fn benchmark_dct(c: &mut Criterion) {
-    // Generate test pixels (32x32 = 1024 f32 values)
-    let pixels: Vec<f32> = (0..1024).map(|i| (i % 256) as f32 / 255.0).collect();
-    let pixels_array: [f32; 1024] = pixels.try_into().unwrap();
-
-    c.bench_function("dct_only", |b| {
-        b.iter(|| {
-            // Access DCT through a test function or internal API
-            // For now, we fingerprint a tiny image to measure DCT overhead
-            let _ = black_box(&pixels_array);
-        })
-    });
-}
-
 fn benchmark_scaling(c: &mut Criterion) {
     let mut group = c.benchmark_group("fingerprint_scaling");
 
     for size in [256u32, 512, 1024, 2048].iter() {
         let img = create_test_image_size(*size, *size);
 
-        group.bench_with_input(BenchmarkId::new("size", size), size, |b, _| {
+        group.bench_with_input(BenchmarkId::new("multi", size), size, |b, _| {
             b.iter(|| {
                 let _ = ImageFingerprinter::fingerprint(black_box(&img));
+            });
+        });
+
+        group.bench_with_input(BenchmarkId::new("phash_only", size), size, |b, _| {
+            b.iter(|| {
+                let _ = ImageFingerprinter::fingerprint_with(black_box(&img), HashAlgorithm::PHash);
+            });
+        });
+
+        group.bench_with_input(BenchmarkId::new("dhash_only", size), size, |b, _| {
+            b.iter(|| {
+                let _ = ImageFingerprinter::fingerprint_with(black_box(&img), HashAlgorithm::DHash);
             });
         });
     }
@@ -157,11 +204,24 @@ fn benchmark_batch_scaling(c: &mut Criterion) {
             .map(|i| (format!("img{}", i), create_test_image()))
             .collect();
 
-        group.bench_with_input(BenchmarkId::new("batch", batch_size), batch_size, |b, _| {
+        group.bench_with_input(BenchmarkId::new("multi", batch_size), batch_size, |b, _| {
             b.iter(|| {
                 let _ = ImageFingerprinter::fingerprint_batch(black_box(&images));
             });
         });
+
+        group.bench_with_input(
+            BenchmarkId::new("phash_only", batch_size),
+            batch_size,
+            |b, _| {
+                b.iter(|| {
+                    let _ = ImageFingerprinter::fingerprint_batch_with(
+                        black_box(&images),
+                        HashAlgorithm::PHash,
+                    );
+                });
+            },
+        );
     }
 
     group.finish();
@@ -169,13 +229,15 @@ fn benchmark_batch_scaling(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    benchmark_fingerprint,
+    benchmark_fingerprint_multi,
+    benchmark_fingerprint_single,
     benchmark_compare,
+    benchmark_compare_single,
     benchmark_batch,
+    benchmark_batch_single,
     benchmark_decode,
     benchmark_resize,
     benchmark_grayscale,
-    benchmark_dct,
     benchmark_scaling,
     benchmark_batch_scaling
 );
