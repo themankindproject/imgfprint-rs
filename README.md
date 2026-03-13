@@ -6,7 +6,7 @@
 [![Build Status](https://img.shields.io/github/actions/workflow/status/themankindproject/imgfprint-rs/main.yml)](https://github.com/themankindproject/imgfprint-rs/actions)
 ![Rust Version](https://img.shields.io/badge/rust-1.70%2B-blue)
 
-High-performance image fingerprinting library for Rust with **perceptual hashing**, **exact matching**, and **semantic embeddings**.
+High-performance image fingerprinting library for Rust with **multi-algorithm perceptual hashing**, **exact matching**, and **semantic embeddings**.
 
 ## Overview
 
@@ -15,7 +15,9 @@ High-performance image fingerprinting library for Rust with **perceptual hashing
 | Method | Use Case | Speed | Precision |
 |--------|----------|-------|-----------|
 | **SHA256** | Exact deduplication | ~1ms | 100% exact |
-| **pHash** | Perceptual similarity | ~1.5ms | Resilient to compression, resizing |
+| **PHash** | Perceptual similarity | ~1.5ms | DCT-based, resilient to compression |
+| **DHash** | Structural similarity | ~0.5ms | Gradient-based, good for crops |
+| **Multi** | Combined accuracy | ~1.8ms | Weighted PHash+DHash (60/40) |
 | **Semantic** | Content understanding | Local or API | Captures visual meaning |
 
 Perfect for:
@@ -27,9 +29,9 @@ Perfect for:
 
 ## Features
 
+- **Multi-Algorithm Support** - PHash (DCT-based) + DHash (gradient-based) with weighted combination
 - **Deterministic Output** - Same input always produces same fingerprint
 - **SHA256 Exact Hash** - Byte-identical detection
-- **pHash Perceptual Hash** - DCT-based similarity (resilient to compression, resizing, minor edits)
 - **Block-Level Hashing** - 4x4 grid for crop resistance
 - **Semantic Embeddings** - CLIP-style vector representations via external providers or local ONNX models
 - **SIMD Acceleration** - AVX2/NEON optimized resizing
@@ -75,10 +77,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let img1 = std::fs::read("photo1.jpg")?;
     let img2 = std::fs::read("photo2.jpg")?;
     
+    // Compute all hashes (PHash + DHash) for best accuracy
     let fp1 = ImageFingerprinter::fingerprint(&img1)?;
     let fp2 = ImageFingerprinter::fingerprint(&img2)?;
     
-    let sim = ImageFingerprinter::compare(&fp1, &fp2);
+    let sim = fp1.compare(&fp2);
     
     println!("Similarity: {:.2}", sim.score);
     println!("Exact match: {}", sim.exact_match);
@@ -91,19 +94,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Single Algorithm Mode
+
+```rust
+use imgfprint::{ImageFingerprinter, HashAlgorithm};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let img = std::fs::read("photo.jpg")?;
+    
+    // Use specific algorithm for better speed
+    let fp = ImageFingerprinter::fingerprint_with(&img, HashAlgorithm::DHash)?;
+    
+    Ok(())
+}
+```
+
 ## Documentation
 
 For complete API reference and usage examples, see [USAGE.md](USAGE.md).
 
 ## Architecture
 
-### Fingerprint Structure (168 bytes)
+### Fingerprint Types
+
+#### MultiHashFingerprint (Default)
+
+Contains both PHash and DHash for enhanced accuracy:
+
+```
+MultiHashFingerprint
+├── exact:       [u8; 32]     // SHA256 of original bytes
+├── phash:       ImageFingerprint  // PHash results
+│   ├── global_phash: u64
+│   └── block_hashes: [u64; 16]
+└── dhash:       ImageFingerprint  // DHash results
+    ├── global_phash: u64
+    └── block_hashes: [u64; 16]
+```
+
+#### Single Algorithm Mode
 
 ```
 ImageFingerprint
-├── exact:      [u8; 32]     // SHA256 of original bytes
-├── global_phash: u64        // DCT-based hash (center 32x32)
-└── block_hashes: [u64; 16]  // DCT hashes (4x4 grid, 64x64 each)
+├── exact:       [u8; 32]     // SHA256 of original bytes
+├── global_phash: u64         // Algorithm-specific hash (center 32x32)
+└── block_hashes: [u64; 16]   // Block-level hashes (4x4 grid, 64x64 each)
 ```
 
 ### Algorithm Pipeline
@@ -111,22 +146,23 @@ ImageFingerprint
 1. **Decode** - Parse any supported format (PNG, JPEG, GIF, WebP, BMP) into RGB
 2. **Normalize** - Resize to 256x256 using SIMD-accelerated Lanczos3 filter
 3. **Convert** - RGB to Grayscale (luminance)
-4. **Global Hash** - Extract center 32x32, DCT, pHash
-5. **Block Hashes** - Split into 4x4 grid (64x64 blocks), DCT, 16 pHashes
-6. **Exact Hash** - SHA256 of original bytes
+4. **Parallel Hash Computation** - Both algorithms computed simultaneously:
+   - **PHash**: DCT-based, center 32x32 + 4x4 blocks
+   - **DHash**: Gradient-based, resample to 9x8
+5. **Exact Hash** - SHA256 of original bytes
 
-### Similarity Computation
+### Multi-Algorithm Comparison
 
-The similarity score is a weighted combination:
+When using `MultiHashFingerprint`, the similarity score uses weighted combination:
 
-- **40%** Global perceptual hash similarity
-- **60%** Block-level hash similarity (crop-resistant)
+- **60%** PHash similarity (DCT-based, robust to compression)
+- **40%** DHash similarity (gradient-based, good for structural changes)
 
-Block distances > 32 are filtered (handles cropping by ignoring missing blocks).
+This provides better accuracy than any single algorithm alone.
 
 ## Performance
 
-Benchmarked on AMD Ryzen 9 5900X (single core unless noted):
+Benchmarked on Intel i5 11th gen (16 GB RAM , 4 cores 8 threads):
 
 | Operation | Time | Throughput |
 |-----------|------|------------|
@@ -160,7 +196,9 @@ cargo bench
 | Feature | imgfprint-rs | imagehash | img_hash |
 |---------|-------------|-----------|----------|
 | SHA256 exact | Yes | No | No |
-| pHash | Yes | Yes | Yes |
+| PHash | Yes | Yes | Yes |
+| DHash | Yes | Yes | Yes |
+| Multi-algorithm | Yes | No | No |
 | Block hashes | Yes | No | No |
 | Semantic embeddings | Yes | No | No |
 | Local ONNX inference | Yes | No | No |

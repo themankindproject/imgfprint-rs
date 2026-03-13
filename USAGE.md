@@ -9,8 +9,11 @@
 - [Quick Start](#quick-start)
 - [Core API](#core-api)
   - [ImageFingerprinter](#imagefingerprinter)
+    - [Multi-Algorithm Mode (Default)](#multi-algorithm-mode-default)
+    - [Single Algorithm Mode](#single-algorithm-mode)
   - [FingerprinterContext](#fingerprintercontext)
   - [ImageFingerprint](#imagefingerprint)
+  - [MultiHashFingerprint](#multihashfingerprint)
   - [Similarity](#similarity)
 - [Advanced Usage](#advanced-usage)
   - [Batch Processing](#batch-processing)
@@ -30,9 +33,9 @@ Add the dependency to your `Cargo.toml`:
 imgfprint = "0.1.2"
 ```
 
-### Basic Example
+### Basic Example (Multi-Algorithm)
 
-Compare two images for similarity:
+Compare two images using both PHash and DHash for best accuracy:
 
 ```rust
 use imgfprint::ImageFingerprinter;
@@ -42,12 +45,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let img1 = std::fs::read("photo1.jpg")?;
     let img2 = std::fs::read("photo2.jpg")?;
     
-    // Generate fingerprints
+    // Generate fingerprints (computes both PHash and DHash in parallel)
     let fp1 = ImageFingerprinter::fingerprint(&img1)?;
     let fp2 = ImageFingerprinter::fingerprint(&img2)?;
     
-    // Compare
-    let sim = ImageFingerprinter::compare(&fp1, &fp2);
+    // Compare using weighted combination (60% PHash, 40% DHash)
+    let sim = fp1.compare(&fp2);
     
     println!("Similarity: {:.2}", sim.score);
     println!("Exact match: {}", sim.exact_match);
@@ -55,6 +58,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if sim.score > 0.8 {
         println!("Images are perceptually similar");
     }
+    
+    Ok(())
+}
+```
+
+### Single Algorithm Example
+
+For better performance when you only need one algorithm:
+
+```rust
+use imgfprint::{ImageFingerprinter, HashAlgorithm};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let img1 = std::fs::read("photo1.jpg")?;
+    let img2 = std::fs::read("photo2.jpg")?;
+    
+    // Use only DHash (faster than multi-algorithm)
+    let fp1 = ImageFingerprinter::fingerprint_with(&img1, HashAlgorithm::DHash)?;
+    let fp2 = ImageFingerprinter::fingerprint_with(&img2, HashAlgorithm::DHash)?;
+    
+    let sim = ImageFingerprinter::compare(&fp1, &fp2);
+    
+    println!("Similarity: {:.2}", sim.score);
     
     Ok(())
 }
@@ -68,21 +94,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Static methods for computing and comparing fingerprints. The primary entry point for most use cases.
 
-#### `fingerprint()`
+#### Multi-Algorithm Mode (Default)
+
+##### `fingerprint()`
 
 ```rust
 pub fn fingerprint(
     image_bytes: &[u8]
-) -> Result<ImageFingerprint, ImgFprintError>
+) -> Result<MultiHashFingerprint, ImgFprintError>
 ```
 
-Computes a perceptual fingerprint from raw image bytes.
+Computes **both PHash and DHash** in parallel for maximum accuracy.
 
 **Returns:**
-- `ImageFingerprint` containing:
+- `MultiHashFingerprint` containing:
   - SHA256 hash of original bytes (exact matching)
-  - Global perceptual hash (center 32x32 region)
-  - 16 block-level hashes (4x4 grid for crop resistance)
+  - PHash results: global + 16 block hashes
+  - DHash results: global + 16 block hashes
 
 **Example:**
 ```rust
@@ -90,6 +118,38 @@ use imgfprint::ImageFingerprinter;
 
 let image_bytes = std::fs::read("image.png")?;
 let fingerprint = ImageFingerprinter::fingerprint(&image_bytes)?;
+
+// Access individual algorithms
+let phash = fingerprint.phash();
+let dhash = fingerprint.dhash();
+```
+
+#### Single Algorithm Mode
+
+##### `fingerprint_with()`
+
+```rust
+pub fn fingerprint_with(
+    image_bytes: &[u8],
+    algorithm: HashAlgorithm
+) -> Result<ImageFingerprint, ImgFprintError>
+```
+
+Computes a single perceptual hash using the specified algorithm.
+
+**Algorithms:**
+- `HashAlgorithm::PHash` - DCT-based (robust to compression)
+- `HashAlgorithm::DHash` - Gradient-based (fast, good for structural changes)
+
+**Example:**
+```rust
+use imgfprint::{ImageFingerprinter, HashAlgorithm};
+
+// Use only DHash (faster than computing both)
+let fp = ImageFingerprinter::fingerprint_with(
+    &image_bytes,
+    HashAlgorithm::DHash
+)?;
 ```
 
 #### `compare()`
@@ -102,6 +162,8 @@ pub fn compare(
 ```
 
 Compares two fingerprints and returns a similarity score.
+
+**Note:** For `MultiHashFingerprint`, use the `compare()` method directly on the struct for weighted multi-algorithm comparison.
 
 **Returns:**
 - `Similarity` struct with:
@@ -186,10 +248,10 @@ let mut ctx = FingerprinterContext::new();
 pub fn fingerprint(
     &mut self,
     image_bytes: &[u8]
-) -> Result<ImageFingerprint, ImgFprintError>
+) -> Result<MultiHashFingerprint, ImgFprintError>
 ```
 
-Computes fingerprint using internal buffer reuse.
+Computes **all hashes** (PHash + DHash) in parallel using internal buffer reuse.
 
 **Example:**
 ```rust
@@ -201,11 +263,37 @@ let mut ctx = FingerprinterContext::new();
 for path in image_paths {
     let bytes = std::fs::read(path)?;
     let fp = ctx.fingerprint(&bytes)?;
-    // Process fingerprint...
+    // fp is MultiHashFingerprint
 }
 ```
 
 **Performance:** Context API saves approximately 260KB of allocations per image compared to the static API. Essential for high-throughput scenarios (10M+ images/day).
+
+#### `fingerprint_with()`
+
+```rust
+pub fn fingerprint_with(
+    &mut self,
+    image_bytes: &[u8],
+    algorithm: HashAlgorithm
+) -> Result<ImageFingerprint, ImgFprintError>
+```
+
+Computes a **single algorithm** fingerprint using internal buffer reuse.
+
+**Example:**
+```rust
+use imgfprint::{FingerprinterContext, HashAlgorithm};
+
+let mut ctx = FingerprinterContext::new();
+
+// Process only DHash for speed
+for path in image_paths {
+    let bytes = std::fs::read(path)?;
+    let fp = ctx.fingerprint_with(&bytes, HashAlgorithm::DHash)?;
+    // Process fingerprint...
+}
+```
 
 ---
 
@@ -320,6 +408,104 @@ if fp1.is_similar(&fp2, 0.5) {
 ```
 
 **Note:** A threshold of 1.0 requires exact match (both SHA256 and perceptual hash identical).
+
+---
+
+### MultiHashFingerprint
+
+A multi-algorithm fingerprint containing both PHash and DHash results for enhanced accuracy.
+
+#### Accessors
+
+##### `exact_hash()`
+
+```rust
+pub fn exact_hash(&self) -> &[u8; 32]
+```
+
+Returns the SHA256 hash of original image bytes.
+
+##### `phash()`
+
+```rust
+pub fn phash(&self) -> &ImageFingerprint
+```
+
+Returns the PHash-based fingerprint (global + block hashes).
+
+##### `dhash()`
+
+```rust
+pub fn dhash(&self) -> &ImageFingerprint
+```
+
+Returns the DHash-based fingerprint (global + block hashes).
+
+**Example:**
+```rust
+let multi = ImageFingerprinter::fingerprint(&image_bytes)?;
+
+// Access individual algorithms
+let phash = multi.phash();
+let dhash = multi.dhash();
+
+println!("PHash: {:016x}", phash.global_phash());
+println!("DHash: {:016x}", dhash.global_phash());
+```
+
+##### `get()`
+
+```rust
+pub fn get(&self, algorithm: HashAlgorithm) -> &ImageFingerprint
+```
+
+Returns the fingerprint for a specific algorithm.
+
+**Example:**
+```rust
+use imgfprint::HashAlgorithm;
+
+let fp = multi.get(HashAlgorithm::PHash);
+```
+
+#### Comparison Methods
+
+##### `compare()`
+
+```rust
+pub fn compare(&self, other: &MultiHashFingerprint) -> Similarity
+```
+
+Compares two multi-hash fingerprints using weighted combination.
+
+**Weights:**
+- **60%** PHash similarity (DCT-based, robust to compression)
+- **40%** DHash similarity (gradient-based, good for structural changes)
+
+**Example:**
+```rust
+let multi1 = ImageFingerprinter::fingerprint(&img1)?;
+let multi2 = ImageFingerprinter::fingerprint(&img2)?;
+
+// Weighted comparison
+let sim = multi1.compare(&multi2);
+println!("Combined similarity: {:.2}", sim.score);
+```
+
+##### `is_similar()`
+
+```rust
+pub fn is_similar(&self, other: &MultiHashFingerprint, threshold: f32) -> bool
+```
+
+Checks if this fingerprint is similar to another within a threshold.
+
+**Example:**
+```rust
+if multi1.is_similar(&multi2, 0.8) {
+    println!("Images are similar!");
+}
+```
 
 ---
 
