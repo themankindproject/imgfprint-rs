@@ -45,7 +45,7 @@ Perfect for:
 
 ```toml
 [dependencies]
-imgfprint = "0.1.3"
+imgfprint = "0.2.0"
 ```
 
 ### Feature Flags
@@ -59,13 +59,13 @@ imgfprint = "0.1.3"
 Minimal build (no parallel processing):
 ```toml
 [dependencies]
-imgfprint = { version = "0.1.3", default-features = false }
+imgfprint = { version = "0.2.0", default-features = false }
 ```
 
 With local embeddings (requires ONNX model):
 ```toml
 [dependencies]
-imgfprint = { version = "0.1.3", features = ["local-embedding"] }
+imgfprint = { version = "0.2.0", features = ["local-embedding"] }
 ```
 
 ## Quick Start
