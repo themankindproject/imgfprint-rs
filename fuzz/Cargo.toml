@@ -18,6 +18,14 @@ path = "fuzz_targets/compare_fuzz.rs"
 name = "deserialize_fuzz"
 path = "fuzz_targets/deserialize_fuzz.rs"
 
+[[bin]]
+name = "algorithm_fuzz"
+path = "fuzz_targets/algorithm_fuzz.rs"
+
+[[bin]]
+name = "batch_fuzz"
+path = "fuzz_targets/batch_fuzz.rs"
+
 [dependencies]
 imgfprint = { path = "..", features = ["serde"] }
 libfuzzer-sys = "0.4"
