@@ -1,9 +1,14 @@
 //! High-performance, deterministic image fingerprinting library.
 //!
-//! Provides perceptual hashing (pHash) with crop resistance for image
+//! Provides perceptual hashing with crop resistance for image
 //! deduplication and similarity detection in production systems.
 //!
+//! Supports multiple algorithms (PHash, DHash) with automatic parallel
+//! computation for improved accuracy.
+//!
 //! ## Quick Start
+//!
+//! Compute all hashes (recommended for best accuracy):
 //!
 //! ```rust
 //! use imgfprint::ImageFingerprinter;
@@ -12,8 +17,22 @@
 //! let fp1 = ImageFingerprinter::fingerprint(&std::fs::read("img1.jpg")?)?;
 //! let fp2 = ImageFingerprinter::fingerprint(&std::fs::read("img2.jpg")?)?;
 //!
-//! let sim = ImageFingerprinter::compare(&fp1, &fp2);
+//! let sim = fp1.compare(&fp2);
 //! println!("Similarity: {:.2}", sim.score);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Compute specific algorithm only:
+//!
+//! ```rust
+//! use imgfprint::{ImageFingerprinter, HashAlgorithm};
+//!
+//! # fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let fp = ImageFingerprinter::fingerprint_with(
+//!     &std::fs::read("img1.jpg")?,
+//!     HashAlgorithm::DHash
+//! )?;
 //! # Ok(())
 //! # }
 //! ```
@@ -51,10 +70,11 @@ mod error;
 mod hash;
 mod imgproc;
 
-pub use core::fingerprint::ImageFingerprint;
+pub use core::fingerprint::{ImageFingerprint, MultiHashFingerprint};
 pub use core::fingerprinter::{FingerprinterContext, ImageFingerprinter};
 pub use core::similarity::Similarity;
 pub use embed::{semantic_similarity, Embedding, EmbeddingProvider};
+pub use hash::algorithms::HashAlgorithm;
 
 #[cfg(feature = "local-embedding")]
 pub use embed::{LocalProvider, LocalProviderConfig};
@@ -77,21 +97,50 @@ mod tests {
     }
 
     #[test]
-    fn test_deterministic_fingerprints() {
+    fn test_multi_hash_deterministic() {
         let img = create_test_image();
         let fp1 = ImageFingerprinter::fingerprint(&img).unwrap();
         let fp2 = ImageFingerprinter::fingerprint(&img).unwrap();
 
         assert_eq!(fp1.exact_hash(), fp2.exact_hash());
-        assert_eq!(fp1.global_phash(), fp2.global_phash());
-        assert_eq!(fp1.block_hashes(), fp2.block_hashes());
+        assert_eq!(fp1.phash().global_phash(), fp2.phash().global_phash());
+        assert_eq!(fp1.dhash().global_phash(), fp2.dhash().global_phash());
     }
 
     #[test]
-    fn test_identical_images() {
+    fn test_single_algorithm_deterministic() {
+        let img = create_test_image();
+
+        let fp1 = ImageFingerprinter::fingerprint_with(&img, HashAlgorithm::PHash).unwrap();
+        let fp2 = ImageFingerprinter::fingerprint_with(&img, HashAlgorithm::PHash).unwrap();
+
+        assert_eq!(fp1.exact_hash(), fp2.exact_hash());
+        assert_eq!(fp1.global_phash(), fp2.global_phash());
+        assert_eq!(fp1.block_hashes(), fp2.block_hashes());
+
+        let fp3 = ImageFingerprinter::fingerprint_with(&img, HashAlgorithm::DHash).unwrap();
+        let fp4 = ImageFingerprinter::fingerprint_with(&img, HashAlgorithm::DHash).unwrap();
+
+        assert_eq!(fp3.global_phash(), fp4.global_phash());
+    }
+
+    #[test]
+    fn test_multi_hash_identical_images() {
         let img = create_test_image();
         let fp1 = ImageFingerprinter::fingerprint(&img).unwrap();
         let fp2 = ImageFingerprinter::fingerprint(&img).unwrap();
+        let sim = fp1.compare(&fp2);
+
+        assert!(sim.exact_match);
+        assert_eq!(sim.score, 1.0);
+        assert_eq!(sim.perceptual_distance, 0);
+    }
+
+    #[test]
+    fn test_single_hash_identical_images() {
+        let img = create_test_image();
+        let fp1 = ImageFingerprinter::fingerprint_with(&img, HashAlgorithm::PHash).unwrap();
+        let fp2 = ImageFingerprinter::fingerprint_with(&img, HashAlgorithm::PHash).unwrap();
         let sim = ImageFingerprinter::compare(&fp1, &fp2);
 
         assert!(sim.exact_match);
@@ -100,7 +149,7 @@ mod tests {
     }
 
     #[test]
-    fn test_similar_images() {
+    fn test_similar_images_multi_hash() {
         let img1: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
             ImageBuffer::from_fn(300, 300, |_, _| Rgb([100, 150, 200]));
         let mut buf1 = Vec::new();
@@ -121,6 +170,34 @@ mod tests {
 
         let fp1 = ImageFingerprinter::fingerprint(&buf1).unwrap();
         let fp2 = ImageFingerprinter::fingerprint(&buf2).unwrap();
+        let sim = fp1.compare(&fp2);
+
+        assert!(!sim.exact_match);
+        assert!(sim.score > 0.5, "Similar images: got {}", sim.score);
+    }
+
+    #[test]
+    fn test_similar_images_single_hash() {
+        let img1: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
+            ImageBuffer::from_fn(300, 300, |_, _| Rgb([100, 150, 200]));
+        let mut buf1 = Vec::new();
+        img1.write_to(
+            &mut std::io::Cursor::new(&mut buf1),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+
+        let img2: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
+            ImageBuffer::from_fn(300, 300, |_, _| Rgb([102, 148, 198]));
+        let mut buf2 = Vec::new();
+        img2.write_to(
+            &mut std::io::Cursor::new(&mut buf2),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+
+        let fp1 = ImageFingerprinter::fingerprint_with(&buf1, HashAlgorithm::PHash).unwrap();
+        let fp2 = ImageFingerprinter::fingerprint_with(&buf2, HashAlgorithm::PHash).unwrap();
         let sim = ImageFingerprinter::compare(&fp1, &fp2);
 
         assert!(!sim.exact_match);
@@ -154,7 +231,7 @@ mod tests {
 
         let fp1 = ImageFingerprinter::fingerprint(&buf1).unwrap();
         let fp2 = ImageFingerprinter::fingerprint(&buf2).unwrap();
-        let sim = ImageFingerprinter::compare(&fp1, &fp2);
+        let sim = fp1.compare(&fp2);
 
         assert!(!sim.exact_match);
         assert!(
@@ -189,7 +266,7 @@ mod tests {
 
         let fp1 = ImageFingerprinter::fingerprint(&buf).unwrap();
         let fp2 = ImageFingerprinter::fingerprint(&buf_resized).unwrap();
-        let sim = ImageFingerprinter::compare(&fp1, &fp2);
+        let sim = fp1.compare(&fp2);
 
         assert!(sim.score > 0.6, "Resized similarity: got {}", sim.score);
         assert!(!sim.exact_match);
@@ -208,7 +285,7 @@ mod tests {
 
         let fp1 = ImageFingerprinter::fingerprint(&buf).unwrap();
         let fp2 = ImageFingerprinter::fingerprint(&buf).unwrap();
-        let sim = ImageFingerprinter::compare(&fp1, &fp2);
+        let sim = fp1.compare(&fp2);
 
         assert!(sim.score > 0.8, "JPEG compression: got {}", sim.score);
     }
@@ -232,12 +309,20 @@ mod tests {
     fn test_fingerprint_accessors() {
         let fp = ImageFingerprinter::fingerprint(&create_test_image()).unwrap();
         assert_eq!(fp.exact_hash().len(), 32);
+        assert_eq!(fp.phash().block_hashes().len(), 16);
+        assert_eq!(fp.dhash().block_hashes().len(), 16);
+    }
+
+    #[test]
+    fn test_single_fingerprint_accessors() {
+        let fp = ImageFingerprinter::fingerprint_with(&create_test_image(), HashAlgorithm::PHash)
+            .unwrap();
+        assert_eq!(fp.exact_hash().len(), 32);
         assert_eq!(fp.block_hashes().len(), 16);
     }
 
     #[test]
     fn test_error_image_too_small() {
-        // Create a 31x31 image (below minimum)
         let img: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
             ImageBuffer::from_fn(31, 31, |_, _| Rgb([128, 128, 128]));
         let mut buf = Vec::new();
@@ -254,7 +339,6 @@ mod tests {
 
     #[test]
     fn test_error_image_too_large() {
-        // Create a 8193x100 image (above maximum)
         let img: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
             ImageBuffer::from_fn(8193, 100, |_, _| Rgb([128, 128, 128]));
         let mut buf = Vec::new();
@@ -271,7 +355,6 @@ mod tests {
 
     #[test]
     fn test_minimum_valid_image() {
-        // Create exactly 32x32 image (minimum valid size)
         let img: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
             ImageBuffer::from_fn(32, 32, |_, _| Rgb([128, 128, 128]));
         let mut buf = Vec::new();
@@ -288,7 +371,6 @@ mod tests {
 
     #[test]
     fn test_rgba_image_handling() {
-        // Create RGBA image with alpha channel
         use image::Rgba;
         let img: ImageBuffer<image::Rgba<u8>, Vec<u8>> = ImageBuffer::from_fn(300, 300, |x, y| {
             let alpha = if (x + y) % 2 == 0 { 255 } else { 128 };
@@ -298,7 +380,6 @@ mod tests {
         img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
             .unwrap();
 
-        // Should succeed - alpha is handled during RGB conversion
         let result = ImageFingerprinter::fingerprint(&buf);
         assert!(
             result.is_ok(),
@@ -309,7 +390,6 @@ mod tests {
 
     #[test]
     fn test_grayscale_image_handling() {
-        // Create grayscale image
         use image::Luma;
         let img: ImageBuffer<image::Luma<u8>, Vec<u8>> =
             ImageBuffer::from_fn(300, 300, |x, y| Luma([((x + y) % 256) as u8]));
@@ -317,7 +397,6 @@ mod tests {
         img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
             .unwrap();
 
-        // Should succeed - grayscale is handled
         let result = ImageFingerprinter::fingerprint(&buf);
         assert!(
             result.is_ok(),
@@ -328,7 +407,6 @@ mod tests {
 
     #[test]
     fn test_determinism_across_multiple_calls() {
-        // Test that multiple calls produce identical results
         let img = create_test_image();
 
         let fp1 = ImageFingerprinter::fingerprint(&img).unwrap();
@@ -337,15 +415,12 @@ mod tests {
 
         assert_eq!(fp1.exact_hash(), fp2.exact_hash());
         assert_eq!(fp1.exact_hash(), fp3.exact_hash());
-        assert_eq!(fp1.global_phash(), fp2.global_phash());
-        assert_eq!(fp1.global_phash(), fp3.global_phash());
-        assert_eq!(fp1.block_hashes(), fp2.block_hashes());
-        assert_eq!(fp1.block_hashes(), fp3.block_hashes());
+        assert_eq!(fp1.phash().global_phash(), fp2.phash().global_phash());
+        assert_eq!(fp1.dhash().global_phash(), fp3.dhash().global_phash());
     }
 
     #[test]
     fn test_context_api_determinism() {
-        // Test that context API produces same results as static API
         let img = create_test_image();
 
         let fp1 = ImageFingerprinter::fingerprint(&img).unwrap();
@@ -354,28 +429,33 @@ mod tests {
         let fp2 = ctx.fingerprint(&img).unwrap();
 
         assert_eq!(fp1.exact_hash(), fp2.exact_hash());
-        assert_eq!(fp1.global_phash(), fp2.global_phash());
-        assert_eq!(fp1.block_hashes(), fp2.block_hashes());
+        assert_eq!(fp1.phash().global_phash(), fp2.phash().global_phash());
+        assert_eq!(fp1.dhash().global_phash(), fp2.dhash().global_phash());
     }
 
     #[test]
-    fn test_similarity_threshold_edge_cases() {
+    fn test_multi_hash_similarity() {
         let img = create_test_image();
         let fp = ImageFingerprinter::fingerprint(&img).unwrap();
 
-        // Exact match with itself
         assert!(fp.is_similar(&fp, 1.0));
         assert!(fp.is_similar(&fp, 0.0));
+    }
 
-        // Distance should be 0 for identical fingerprints
+    #[test]
+    fn test_single_hash_similarity() {
+        let img = create_test_image();
+        let fp = ImageFingerprinter::fingerprint_with(&img, HashAlgorithm::PHash).unwrap();
+
+        assert!(fp.is_similar(&fp, 1.0));
+        assert!(fp.is_similar(&fp, 0.0));
         assert_eq!(fp.distance(&fp), 0);
     }
 
     #[test]
     fn test_corrupted_image_handling() {
-        // Create a valid PNG header but corrupted data
         let mut corrupted = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        corrupted.extend_from_slice(&[0u8; 100]); // Garbage data
+        corrupted.extend_from_slice(&[0u8; 100]);
 
         let result = ImageFingerprinter::fingerprint(&corrupted);
         assert!(
@@ -390,7 +470,6 @@ mod tests {
 
     #[test]
     fn test_determinism_1000_iterations() {
-        // Production-grade determinism test - 1000 consecutive fingerprints
         let img = create_test_image();
         let expected_fp = ImageFingerprinter::fingerprint(&img).unwrap();
 
@@ -403,15 +482,15 @@ mod tests {
                 i
             );
             assert_eq!(
-                fp.global_phash(),
-                expected_fp.global_phash(),
-                "Global phash mismatch at iteration {}",
+                fp.phash().global_phash(),
+                expected_fp.phash().global_phash(),
+                "PHash mismatch at iteration {}",
                 i
             );
             assert_eq!(
-                fp.block_hashes(),
-                expected_fp.block_hashes(),
-                "Block hashes mismatch at iteration {}",
+                fp.dhash().global_phash(),
+                expected_fp.dhash().global_phash(),
+                "DHash mismatch at iteration {}",
                 i
             );
         }
@@ -419,7 +498,6 @@ mod tests {
 
     #[test]
     fn test_determinism_various_sizes() {
-        // Test determinism across different image dimensions
         use image::{ImageBuffer, Rgb};
 
         let sizes = [
@@ -451,16 +529,16 @@ mod tests {
                 height
             );
             assert_eq!(
-                fp1.global_phash(),
-                fp2.global_phash(),
-                "Size {}x{}: global phash not deterministic",
+                fp1.phash().global_phash(),
+                fp2.phash().global_phash(),
+                "Size {}x{}: phash not deterministic",
                 width,
                 height
             );
             assert_eq!(
-                fp1.block_hashes(),
-                fp2.block_hashes(),
-                "Size {}x{}: block hashes not deterministic",
+                fp1.dhash().global_phash(),
+                fp2.dhash().global_phash(),
+                "Size {}x{}: dhash not deterministic",
                 width,
                 height
             );
@@ -469,7 +547,6 @@ mod tests {
 
     #[test]
     fn test_determinism_with_context_reuse() {
-        // Test that context reuse maintains determinism
         let img = create_test_image();
         let mut ctx = FingerprinterContext::new();
 
@@ -484,15 +561,15 @@ mod tests {
                 i
             );
             assert_eq!(
-                fp.global_phash(),
-                expected_fp.global_phash(),
-                "Context reuse: global phash mismatch at iteration {}",
+                fp.phash().global_phash(),
+                expected_fp.phash().global_phash(),
+                "Context reuse: phash mismatch at iteration {}",
                 i
             );
             assert_eq!(
-                fp.block_hashes(),
-                expected_fp.block_hashes(),
-                "Context reuse: block hashes mismatch at iteration {}",
+                fp.dhash().global_phash(),
+                expected_fp.dhash().global_phash(),
+                "Context reuse: dhash mismatch at iteration {}",
                 i
             );
         }
@@ -500,10 +577,8 @@ mod tests {
 
     #[test]
     fn test_determinism_across_similar_images() {
-        // Test that similar images produce consistent similarity scores
         use image::{ImageBuffer, Rgb};
 
-        // Create two visually similar images
         let img1: ImageBuffer<Rgb<u8>, Vec<u8>> =
             ImageBuffer::from_fn(300, 300, |_, _| Rgb([100, 150, 200]));
         let img2: ImageBuffer<Rgb<u8>, Vec<u8>> =
@@ -526,17 +601,27 @@ mod tests {
         let fp1_again = ImageFingerprinter::fingerprint(&buf1).unwrap();
         let fp2 = ImageFingerprinter::fingerprint(&buf2).unwrap();
 
-        // Same image should always produce same fingerprint
-        assert_eq!(fp1.global_phash(), fp1_again.global_phash());
+        assert_eq!(fp1.phash().global_phash(), fp1_again.phash().global_phash());
 
-        // Similarity comparison should be deterministic
-        let sim1 = ImageFingerprinter::compare(&fp1, &fp2);
-        let sim2 = ImageFingerprinter::compare(&fp1, &fp2);
+        let sim1 = fp1.compare(&fp2);
+        let sim2 = fp1.compare(&fp2);
 
         assert_eq!(sim1.score, sim2.score, "Similarity score not deterministic");
         assert_eq!(
             sim1.perceptual_distance, sim2.perceptual_distance,
             "Perceptual distance not deterministic"
         );
+    }
+
+    #[test]
+    fn test_algorithm_accessor() {
+        let img = create_test_image();
+        let fp = ImageFingerprinter::fingerprint(&img).unwrap();
+
+        let phash_fp = fp.get(HashAlgorithm::PHash);
+        let dhash_fp = fp.get(HashAlgorithm::DHash);
+
+        assert_eq!(phash_fp.global_phash(), fp.phash().global_phash());
+        assert_eq!(dhash_fp.global_phash(), fp.dhash().global_phash());
     }
 }
