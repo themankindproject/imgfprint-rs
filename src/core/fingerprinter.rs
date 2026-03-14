@@ -1,6 +1,7 @@
 use crate::core::fingerprint::{ImageFingerprint, MultiHashFingerprint};
 use crate::core::similarity;
 use crate::error::ImgFprintError;
+use crate::hash::ahash::{compute_ahash, compute_ahash_from_64x64};
 use crate::hash::algorithms::HashAlgorithm;
 use crate::hash::dhash::{compute_dhash, compute_dhash_from_64x64};
 use crate::hash::phash::{compute_phash, compute_phash_from_64x64};
@@ -70,33 +71,44 @@ impl FingerprinterContext {
         let blocks = extract_blocks(&normalized);
 
         #[cfg(feature = "parallel")]
-        let (phash_fp, dhash_fp) = {
-            let (phash_result, dhash_result) = rayon::join(
-                || Self::compute_phash_data(&global_region, &blocks),
-                || Self::compute_dhash_data(&global_region, &blocks),
+        let (ahash_fp, phash_fp, dhash_fp) = {
+            let (ahash_result, (phash_result, dhash_result)) = rayon::join(
+                || Self::compute_ahash_data(&global_region, &blocks),
+                || {
+                    rayon::join(
+                        || Self::compute_phash_data(&global_region, &blocks),
+                        || Self::compute_dhash_data(&global_region, &blocks),
+                    )
+                },
             );
 
+            let (global_ahash, block_ahashes) = ahash_result;
             let (global_hash, block_hashes) = phash_result;
             let (global_dhash, block_dhashes) = dhash_result;
 
             (
+                ImageFingerprint::new(exact_hash, global_ahash, block_ahashes),
                 ImageFingerprint::new(exact_hash, global_hash, block_hashes),
                 ImageFingerprint::new(exact_hash, global_dhash, block_dhashes),
             )
         };
 
         #[cfg(not(feature = "parallel"))]
-        let (phash_fp, dhash_fp) = {
+        let (ahash_fp, phash_fp, dhash_fp) = {
+            let (global_ahash, block_ahashes) = Self::compute_ahash_data(&global_region, &blocks);
             let (global_hash, block_hashes) = Self::compute_phash_data(&global_region, &blocks);
             let (global_dhash, block_dhashes) = Self::compute_dhash_data(&global_region, &blocks);
 
             (
+                ImageFingerprint::new(exact_hash, global_ahash, block_ahashes),
                 ImageFingerprint::new(exact_hash, global_hash, block_hashes),
                 ImageFingerprint::new(exact_hash, global_dhash, block_dhashes),
             )
         };
 
-        Ok(MultiHashFingerprint::new(exact_hash, phash_fp, dhash_fp))
+        Ok(MultiHashFingerprint::new(
+            exact_hash, ahash_fp, phash_fp, dhash_fp,
+        ))
     }
 
     fn compute_single_hash(
@@ -115,6 +127,7 @@ impl FingerprinterContext {
         let blocks = extract_blocks(&normalized);
 
         let (global_hash, block_hashes) = match algorithm {
+            HashAlgorithm::AHash => Self::compute_ahash_data(&global_region, &blocks),
             HashAlgorithm::PHash => Self::compute_phash_data(&global_region, &blocks),
             HashAlgorithm::DHash => Self::compute_dhash_data(&global_region, &blocks),
         };
@@ -143,6 +156,34 @@ impl FingerprinterContext {
             let mut hashes = [0u64; 16];
             for (i, block) in blocks.iter().enumerate() {
                 hashes[i] = compute_phash_from_64x64(block);
+            }
+            hashes
+        };
+
+        (global_hash, block_hashes)
+    }
+
+    fn compute_ahash_data(
+        global_region: &[f32; 32 * 32],
+        blocks: &[[f32; 64 * 64]; 16],
+    ) -> (u64, [u64; 16]) {
+        let global_hash = compute_ahash(global_region);
+
+        #[cfg(feature = "parallel")]
+        let block_hashes = {
+            use rayon::prelude::*;
+            let mut hashes = [0u64; 16];
+            hashes.par_iter_mut().enumerate().for_each(|(i, hash)| {
+                *hash = compute_ahash_from_64x64(&blocks[i]);
+            });
+            hashes
+        };
+
+        #[cfg(not(feature = "parallel"))]
+        let block_hashes = {
+            let mut hashes = [0u64; 16];
+            for (i, block) in blocks.iter().enumerate() {
+                hashes[i] = compute_ahash_from_64x64(block);
             }
             hashes
         };

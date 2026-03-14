@@ -15,9 +15,10 @@ High-performance image fingerprinting library for Rust with **multi-algorithm pe
 | Method | Use Case | Speed | Precision |
 |--------|----------|-------|-----------|
 | **BLAKE3** | Exact deduplication | ~0.2ms | 100% exact |
+| **AHash** | Fast similarity | ~0.3ms | Average-based, simplest |
 | **PHash** | Perceptual similarity | ~1.5ms | DCT-based, resilient to compression |
 | **DHash** | Structural similarity | ~0.5ms | Gradient-based, good for crops |
-| **Multi** | Combined accuracy | ~1.8ms | Weighted PHash+DHash (60/40) |
+| **Multi** | Combined accuracy | ~1.8ms | Weighted AHash+PHash+DHash (10/60/30) |
 | **Semantic** | Content understanding | Local or API | Captures visual meaning |
 
 Perfect for:
@@ -29,7 +30,7 @@ Perfect for:
 
 ## Features
 
-- **Multi-Algorithm Support** - PHash (DCT-based) + DHash (gradient-based) with weighted combination
+- **Multi-Algorithm Support** - AHash (average) + PHash (DCT-based) + DHash (gradient-based) with weighted combination
 - **Deterministic Output** - Same input always produces same fingerprint
 - **BLAKE3 Exact Hash** - Byte-identical detection (6-8x faster than SHA256)
 - **Block-Level Hashing** - 4x4 grid for crop resistance
@@ -77,7 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let img1 = std::fs::read("photo1.jpg")?;
     let img2 = std::fs::read("photo2.jpg")?;
     
-    // Compute all hashes (PHash + DHash) for best accuracy
+    // Compute all hashes (AHash + PHash + DHash) for best accuracy
     let fp1 = ImageFingerprinter::fingerprint(&img1)?;
     let fp2 = ImageFingerprinter::fingerprint(&img2)?;
     
@@ -119,11 +120,14 @@ For complete API reference and usage examples, see [USAGE.md](USAGE.md).
 
 #### MultiHashFingerprint (Default)
 
-Contains both PHash and DHash for enhanced accuracy:
+Contains AHash, PHash, and DHash for enhanced accuracy:
 
 ```
 MultiHashFingerprint
 ├── exact:       [u8; 32]     // BLAKE3 of original bytes
+├── ahash:       ImageFingerprint  // AHash results
+│   ├── global_hash: u64
+│   └── block_hashes: [u64; 16]
 ├── phash:       ImageFingerprint  // PHash results
 │   ├── global_hash: u64
 │   └── block_hashes: [u64; 16]
@@ -146,7 +150,8 @@ ImageFingerprint
 1. **Decode** - Parse any supported format (PNG, JPEG, GIF, WebP, BMP) into RGB
 2. **Normalize** - Resize to 256x256 using SIMD-accelerated Lanczos3 filter
 3. **Convert** - RGB to Grayscale (luminance)
-4. **Parallel Hash Computation** - Both algorithms computed simultaneously:
+4. **Parallel Hash Computation** - All three algorithms computed simultaneously:
+   - **AHash**: Average-based, resample to 8x8, compare to mean
    - **PHash**: DCT-based, center 32x32 + 4x4 blocks
    - **DHash**: Gradient-based, resample to 9x8
 5. **Exact Hash** - BLAKE3 of original bytes
@@ -155,8 +160,9 @@ ImageFingerprint
 
 When using `MultiHashFingerprint`, the similarity score uses weighted combination:
 
+- **10%** AHash similarity (average hash, fastest, simplest)
 - **60%** PHash similarity (DCT-based, robust to compression)
-- **40%** DHash similarity (gradient-based, good for structural changes)
+- **30%** DHash similarity (gradient-based, good for structural changes)
 
 This provides better accuracy than any single algorithm alone.
 
@@ -196,6 +202,7 @@ cargo bench
 | Feature | imgfprint-rs | imagehash | img_hash |
 |---------|-------------|-----------|----------|
 | BLAKE3 exact | Yes | No | No |
+| AHash | Yes | Yes | Yes |
 | PHash | Yes | Yes | Yes |
 | DHash | Yes | Yes | Yes |
 | Multi-algorithm | Yes | No | No |

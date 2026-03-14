@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **AHash (Average Hash) implementation**:
+  - New `HashAlgorithm::AHash` variant
+  - Average-based perceptual hash algorithm
+  - Bilinear resampling from 32x32 to 8x8
+  - 64-bit hash output with 16 block-level hashes
+  - Fastest algorithm (~0.3ms)
+
+- **Three-algorithm fingerprinting**: Compute AHash, PHash, and DHash simultaneously
+  - Weighted similarity: 10% AHash + 60% PHash + 30% DHash
+  - New `MultiHashFingerprint::ahash()` accessor
+  - Parallel computation of all three algorithms
+
 ### Changed
 
 - Replaced SHA2 with BLAKE3 for exact hashing

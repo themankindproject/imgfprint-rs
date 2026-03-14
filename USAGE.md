@@ -35,7 +35,7 @@ imgfprint = "0.2.0"
 
 ### Basic Example (Multi-Algorithm)
 
-Compare two images using both PHash and DHash for best accuracy:
+Compare three images using AHash, PHash, and DHash for best accuracy:
 
 ```rust
 use imgfprint::ImageFingerprinter;
@@ -45,11 +45,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let img1 = std::fs::read("photo1.jpg")?;
     let img2 = std::fs::read("photo2.jpg")?;
     
-    // Generate fingerprints (computes both PHash and DHash in parallel)
+    // Generate fingerprints (computes AHash, PHash, and DHash in parallel)
     let fp1 = ImageFingerprinter::fingerprint(&img1)?;
     let fp2 = ImageFingerprinter::fingerprint(&img2)?;
     
-    // Compare using weighted combination (60% PHash, 40% DHash)
+    // Compare using weighted combination (10% AHash, 60% PHash, 30% DHash)
     let sim = fp1.compare(&fp2);
     
     println!("Similarity: {:.2}", sim.score);
@@ -74,9 +74,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let img1 = std::fs::read("photo1.jpg")?;
     let img2 = std::fs::read("photo2.jpg")?;
     
-    // Use only DHash (faster than multi-algorithm)
-    let fp1 = ImageFingerprinter::fingerprint_with(&img1, HashAlgorithm::DHash)?;
-    let fp2 = ImageFingerprinter::fingerprint_with(&img2, HashAlgorithm::DHash)?;
+    // Use specific algorithm for better speed
+    let fp1 = ImageFingerprinter::fingerprint_with(&img1, HashAlgorithm::AHash)?;
+    let fp2 = ImageFingerprinter::fingerprint_with(&img2, HashAlgorithm::AHash)?;
     
     let sim = ImageFingerprinter::compare(&fp1, &fp2);
     
@@ -104,11 +104,12 @@ pub fn fingerprint(
 ) -> Result<MultiHashFingerprint, ImgFprintError>
 ```
 
-Computes **both PHash and DHash** in parallel for maximum accuracy.
+Computes **AHash, PHash, and DHash** in parallel for maximum accuracy.
 
 **Returns:**
 - `MultiHashFingerprint` containing:
   - SHA256 hash of original bytes (exact matching)
+  - AHash results: global + 16 block hashes
   - PHash results: global + 16 block hashes
   - DHash results: global + 16 block hashes
 
@@ -120,6 +121,7 @@ let image_bytes = std::fs::read("image.png")?;
 let fingerprint = ImageFingerprinter::fingerprint(&image_bytes)?;
 
 // Access individual algorithms
+let ahash = fingerprint.ahash();
 let phash = fingerprint.phash();
 let dhash = fingerprint.dhash();
 ```
@@ -138,17 +140,18 @@ pub fn fingerprint_with(
 Computes a single perceptual hash using the specified algorithm.
 
 **Algorithms:**
+- `HashAlgorithm::AHash` - Average Hash (fastest, simplest)
 - `HashAlgorithm::PHash` - DCT-based (robust to compression)
-- `HashAlgorithm::DHash` - Gradient-based (fast, good for structural changes)
+- `HashAlgorithm::DHash` - Gradient-based (good for structural changes)
 
 **Example:**
 ```rust
 use imgfprint::{ImageFingerprinter, HashAlgorithm};
 
-// Use only DHash (faster than computing both)
+// Use only AHash (fastest)
 let fp = ImageFingerprinter::fingerprint_with(
     &image_bytes,
-    HashAlgorithm::DHash
+    HashAlgorithm::AHash
 )?;
 ```
 
@@ -251,7 +254,7 @@ pub fn fingerprint(
 ) -> Result<MultiHashFingerprint, ImgFprintError>
 ```
 
-Computes **all hashes** (PHash + DHash) in parallel using internal buffer reuse.
+Computes **all hashes** (AHash + PHash + DHash) in parallel using internal buffer reuse.
 
 **Example:**
 ```rust
@@ -413,7 +416,7 @@ if fp1.is_similar(&fp2, 0.5) {
 
 ### MultiHashFingerprint
 
-A multi-algorithm fingerprint containing both PHash and DHash results for enhanced accuracy.
+A multi-algorithm fingerprint containing AHash, PHash, and DHash results for enhanced accuracy.
 
 #### Accessors
 
@@ -424,6 +427,14 @@ pub fn exact_hash(&self) -> &[u8; 32]
 ```
 
 Returns the SHA256 hash of original image bytes.
+
+##### `ahash()`
+
+```rust
+pub fn ahash(&self) -> &ImageFingerprint
+```
+
+Returns the AHash-based fingerprint (global + block hashes).
 
 ##### `phash()`
 
@@ -446,9 +457,11 @@ Returns the DHash-based fingerprint (global + block hashes).
 let multi = ImageFingerprinter::fingerprint(&image_bytes)?;
 
 // Access individual algorithms
+let ahash = multi.ahash();
 let phash = multi.phash();
 let dhash = multi.dhash();
 
+println!("AHash: {:016x}", ahash.global_hash());
 println!("PHash: {:016x}", phash.global_hash());
 println!("DHash: {:016x}", dhash.global_hash());
 ```
@@ -479,8 +492,9 @@ pub fn compare(&self, other: &MultiHashFingerprint) -> Similarity
 Compares two multi-hash fingerprints using weighted combination.
 
 **Weights:**
+- **10%** AHash similarity (average hash, fastest)
 - **60%** PHash similarity (DCT-based, robust to compression)
-- **40%** DHash similarity (gradient-based, good for structural changes)
+- **30%** DHash similarity (gradient-based, good for structural changes)
 
 **Example:**
 ```rust

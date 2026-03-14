@@ -3,9 +3,10 @@ use crate::hash::algorithms::HashAlgorithm;
 
 /// Weights for weighted combination of algorithm similarities.
 ///
-/// Default: PHash 60%, DHash 40%
-const PHASH_WEIGHT: f32 = 0.6;
-const DHASH_WEIGHT: f32 = 0.4;
+/// Default: AHash 10%, PHash 60%, DHash 30%
+const AHASH_WEIGHT: f32 = 0.10;
+const PHASH_WEIGHT: f32 = 0.60;
+const DHASH_WEIGHT: f32 = 0.30;
 
 /// A perceptual fingerprint containing multiple hash layers for robust comparison.
 ///
@@ -111,14 +112,21 @@ impl ImageFingerprint {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MultiHashFingerprint {
     pub(crate) exact: [u8; 32],
+    pub(crate) ahash: ImageFingerprint,
     pub(crate) phash: ImageFingerprint,
     pub(crate) dhash: ImageFingerprint,
 }
 
 impl MultiHashFingerprint {
-    pub(crate) fn new(exact: [u8; 32], phash: ImageFingerprint, dhash: ImageFingerprint) -> Self {
+    pub(crate) fn new(
+        exact: [u8; 32],
+        ahash: ImageFingerprint,
+        phash: ImageFingerprint,
+        dhash: ImageFingerprint,
+    ) -> Self {
         Self {
             exact,
+            ahash,
             phash,
             dhash,
         }
@@ -128,6 +136,12 @@ impl MultiHashFingerprint {
     #[inline]
     pub fn exact_hash(&self) -> &[u8; 32] {
         &self.exact
+    }
+
+    /// Returns the AHash-based fingerprint.
+    #[inline]
+    pub fn ahash(&self) -> &ImageFingerprint {
+        &self.ahash
     }
 
     /// Returns the PHash-based fingerprint.
@@ -145,6 +159,7 @@ impl MultiHashFingerprint {
     /// Returns the fingerprint for a specific algorithm.
     pub fn get(&self, algorithm: HashAlgorithm) -> &ImageFingerprint {
         match algorithm {
+            HashAlgorithm::AHash => &self.ahash,
             HashAlgorithm::PHash => &self.phash,
             HashAlgorithm::DHash => &self.dhash,
         }
@@ -152,7 +167,7 @@ impl MultiHashFingerprint {
 
     /// Compares two multi-hash fingerprints using weighted combination.
     ///
-    /// Uses PHash (60%) and DHash (40%) weights to compute overall similarity.
+    /// Uses AHash (25%), PHash (40%) and DHash (35%) weights to compute overall similarity.
     /// Returns a Similarity struct with combined score and component distances.
     ///
     /// # Arguments
@@ -166,16 +181,20 @@ impl MultiHashFingerprint {
             };
         }
 
+        let ahash_dist = self.ahash.distance(&other.ahash);
         let phash_dist = self.phash.distance(&other.phash);
         let dhash_dist = self.dhash.distance(&other.dhash);
 
+        let ahash_sim = 1.0 - (ahash_dist as f32 / 64.0);
         let phash_sim = 1.0 - (phash_dist as f32 / 64.0);
         let dhash_sim = 1.0 - (dhash_dist as f32 / 64.0);
 
-        let weighted_score = phash_sim * PHASH_WEIGHT + dhash_sim * DHASH_WEIGHT;
+        let weighted_score =
+            ahash_sim * AHASH_WEIGHT + phash_sim * PHASH_WEIGHT + dhash_sim * DHASH_WEIGHT;
 
-        let avg_distance =
-            ((phash_dist as f32 * PHASH_WEIGHT) + (dhash_dist as f32 * DHASH_WEIGHT)) as u32;
+        let avg_distance = ((ahash_dist as f32 * AHASH_WEIGHT)
+            + (phash_dist as f32 * PHASH_WEIGHT)
+            + (dhash_dist as f32 * DHASH_WEIGHT)) as u32;
 
         Similarity {
             score: weighted_score.clamp(0.0, 1.0),

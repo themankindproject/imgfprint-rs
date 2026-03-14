@@ -3,13 +3,18 @@
 /// Available perceptual hash algorithms.
 ///
 /// Each algorithm has different characteristics suitable for different use cases:
+/// - **AHash**: Average Hash, fastest, compares pixels to mean
 /// - **PHash**: DCT-based, robust to minor visual changes, slower
 /// - **DHash**: Gradient-based, fast, good for detecting structural changes
-///
-/// Additional algorithms (AHash, WHash) will be added in future versions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum HashAlgorithm {
+    /// Average Hash using mean pixel value threshold.
+    ///
+    /// Simplest and fastest algorithm. Resizes to 8x8 and compares
+    /// each pixel to the average brightness.
+    AHash,
+
     /// Perceptual Hash using Discrete Cosine Transform.
     ///
     /// Most robust to compression artifacts and minor adjustments.
@@ -28,6 +33,7 @@ impl HashAlgorithm {
     /// Returns the bit length of hashes produced by this algorithm.
     pub const fn hash_bits(&self) -> u32 {
         match self {
+            HashAlgorithm::AHash => 64,
             HashAlgorithm::PHash => 64,
             HashAlgorithm::DHash => 64,
         }
