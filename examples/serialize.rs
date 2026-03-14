@@ -23,12 +23,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Binary: {} bytes\n", std::fs::metadata(bin_path)?.len());
 
     let fp_json: imgfprint::ImageFingerprint = serde_json::from_str(&json)?;
-    println!("From JSON - global_phash: {:016x}", fp_json.global_phash());
+    println!("From JSON - global_hash: {:016x}", fp_json.global_hash());
 
     let file = File::open(bin_path)?;
     let mut reader = BufReader::new(file);
     let fp_bin: imgfprint::ImageFingerprint = bincode::deserialize_from(&mut reader)?;
-    println!("From binary - global_phash: {:016x}", fp_bin.global_phash());
+    println!("From binary - global_hash: {:016x}", fp_bin.global_hash());
 
     std::fs::remove_file(bin_path)?;
 

@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(bytes) => {
                     match ImageFingerprinter::fingerprint_with(&bytes, HashAlgorithm::PHash) {
                         Ok(fp) => {
-                            let hash = fp.global_phash();
+                            let hash = fp.global_hash();
                             fingerprints
                                 .entry(format!("{:016x}", hash))
                                 .or_default()

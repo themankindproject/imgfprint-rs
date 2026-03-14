@@ -103,8 +103,8 @@ mod tests {
         let fp2 = ImageFingerprinter::fingerprint(&img).unwrap();
 
         assert_eq!(fp1.exact_hash(), fp2.exact_hash());
-        assert_eq!(fp1.phash().global_phash(), fp2.phash().global_phash());
-        assert_eq!(fp1.dhash().global_phash(), fp2.dhash().global_phash());
+        assert_eq!(fp1.phash().global_hash(), fp2.phash().global_hash());
+        assert_eq!(fp1.dhash().global_hash(), fp2.dhash().global_hash());
     }
 
     #[test]
@@ -115,13 +115,13 @@ mod tests {
         let fp2 = ImageFingerprinter::fingerprint_with(&img, HashAlgorithm::PHash).unwrap();
 
         assert_eq!(fp1.exact_hash(), fp2.exact_hash());
-        assert_eq!(fp1.global_phash(), fp2.global_phash());
+        assert_eq!(fp1.global_hash(), fp2.global_hash());
         assert_eq!(fp1.block_hashes(), fp2.block_hashes());
 
         let fp3 = ImageFingerprinter::fingerprint_with(&img, HashAlgorithm::DHash).unwrap();
         let fp4 = ImageFingerprinter::fingerprint_with(&img, HashAlgorithm::DHash).unwrap();
 
-        assert_eq!(fp3.global_phash(), fp4.global_phash());
+        assert_eq!(fp3.global_hash(), fp4.global_hash());
     }
 
     #[test]
@@ -415,8 +415,8 @@ mod tests {
 
         assert_eq!(fp1.exact_hash(), fp2.exact_hash());
         assert_eq!(fp1.exact_hash(), fp3.exact_hash());
-        assert_eq!(fp1.phash().global_phash(), fp2.phash().global_phash());
-        assert_eq!(fp1.dhash().global_phash(), fp3.dhash().global_phash());
+        assert_eq!(fp1.phash().global_hash(), fp2.phash().global_hash());
+        assert_eq!(fp1.dhash().global_hash(), fp3.dhash().global_hash());
     }
 
     #[test]
@@ -429,8 +429,8 @@ mod tests {
         let fp2 = ctx.fingerprint(&img).unwrap();
 
         assert_eq!(fp1.exact_hash(), fp2.exact_hash());
-        assert_eq!(fp1.phash().global_phash(), fp2.phash().global_phash());
-        assert_eq!(fp1.dhash().global_phash(), fp2.dhash().global_phash());
+        assert_eq!(fp1.phash().global_hash(), fp2.phash().global_hash());
+        assert_eq!(fp1.dhash().global_hash(), fp2.dhash().global_hash());
     }
 
     #[test]
@@ -482,14 +482,14 @@ mod tests {
                 i
             );
             assert_eq!(
-                fp.phash().global_phash(),
-                expected_fp.phash().global_phash(),
+                fp.phash().global_hash(),
+                expected_fp.phash().global_hash(),
                 "PHash mismatch at iteration {}",
                 i
             );
             assert_eq!(
-                fp.dhash().global_phash(),
-                expected_fp.dhash().global_phash(),
+                fp.dhash().global_hash(),
+                expected_fp.dhash().global_hash(),
                 "DHash mismatch at iteration {}",
                 i
             );
@@ -529,15 +529,15 @@ mod tests {
                 height
             );
             assert_eq!(
-                fp1.phash().global_phash(),
-                fp2.phash().global_phash(),
+                fp1.phash().global_hash(),
+                fp2.phash().global_hash(),
                 "Size {}x{}: phash not deterministic",
                 width,
                 height
             );
             assert_eq!(
-                fp1.dhash().global_phash(),
-                fp2.dhash().global_phash(),
+                fp1.dhash().global_hash(),
+                fp2.dhash().global_hash(),
                 "Size {}x{}: dhash not deterministic",
                 width,
                 height
@@ -561,14 +561,14 @@ mod tests {
                 i
             );
             assert_eq!(
-                fp.phash().global_phash(),
-                expected_fp.phash().global_phash(),
+                fp.phash().global_hash(),
+                expected_fp.phash().global_hash(),
                 "Context reuse: phash mismatch at iteration {}",
                 i
             );
             assert_eq!(
-                fp.dhash().global_phash(),
-                expected_fp.dhash().global_phash(),
+                fp.dhash().global_hash(),
+                expected_fp.dhash().global_hash(),
                 "Context reuse: dhash mismatch at iteration {}",
                 i
             );
@@ -601,7 +601,7 @@ mod tests {
         let fp1_again = ImageFingerprinter::fingerprint(&buf1).unwrap();
         let fp2 = ImageFingerprinter::fingerprint(&buf2).unwrap();
 
-        assert_eq!(fp1.phash().global_phash(), fp1_again.phash().global_phash());
+        assert_eq!(fp1.phash().global_hash(), fp1_again.phash().global_hash());
 
         let sim1 = fp1.compare(&fp2);
         let sim2 = fp1.compare(&fp2);
@@ -621,7 +621,7 @@ mod tests {
         let phash_fp = fp.get(HashAlgorithm::PHash);
         let dhash_fp = fp.get(HashAlgorithm::DHash);
 
-        assert_eq!(phash_fp.global_phash(), fp.phash().global_phash());
-        assert_eq!(dhash_fp.global_phash(), fp.dhash().global_phash());
+        assert_eq!(phash_fp.global_hash(), fp.phash().global_hash());
+        assert_eq!(dhash_fp.global_hash(), fp.dhash().global_hash());
     }
 }

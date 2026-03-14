@@ -125,10 +125,10 @@ Contains both PHash and DHash for enhanced accuracy:
 MultiHashFingerprint
 ├── exact:       [u8; 32]     // BLAKE3 of original bytes
 ├── phash:       ImageFingerprint  // PHash results
-│   ├── global_phash: u64
+│   ├── global_hash: u64
 │   └── block_hashes: [u64; 16]
 └── dhash:       ImageFingerprint  // DHash results
-    ├── global_phash: u64
+    ├── global_hash: u64
     └── block_hashes: [u64; 16]
 ```
 
@@ -137,7 +137,7 @@ MultiHashFingerprint
 ```
 ImageFingerprint
 ├── exact:       [u8; 32]     // BLAKE3 of original bytes
-├── global_phash: u64         // Algorithm-specific hash (center 32x32)
+├── global_hash: u64         // Algorithm-specific hash (center 32x32)
 └── block_hashes: [u64; 16]   // Block-level hashes (4x4 grid, 64x64 each)
 ```
 

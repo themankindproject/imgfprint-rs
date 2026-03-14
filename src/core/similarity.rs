@@ -45,7 +45,7 @@ pub fn compute_similarity(a: &ImageFingerprint, b: &ImageFingerprint) -> Similar
         return Similarity::perfect();
     }
 
-    let global_distance = hamming_distance(a.global_phash, b.global_phash);
+    let global_distance = hamming_distance(a.global_hash, b.global_hash);
     let global_similarity = hash_similarity(global_distance);
     let block_similarity = compute_block_similarity(&a.block_hashes, &b.block_hashes);
     let combined_score = 0.4 * global_similarity + 0.6 * block_similarity;

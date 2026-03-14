@@ -17,16 +17,16 @@ const DHASH_WEIGHT: f32 = 0.4;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImageFingerprint {
     pub(crate) exact: [u8; 32],
-    pub(crate) global_phash: u64,
+    pub(crate) global_hash: u64,
     pub(crate) block_hashes: [u64; 16],
 }
 
 impl ImageFingerprint {
     #[inline]
-    pub(crate) fn new(exact: [u8; 32], global_phash: u64, block_hashes: [u64; 16]) -> Self {
+    pub(crate) fn new(exact: [u8; 32], global_hash: u64, block_hashes: [u64; 16]) -> Self {
         Self {
             exact,
-            global_phash,
+            global_hash,
             block_hashes,
         }
     }
@@ -43,10 +43,11 @@ impl ImageFingerprint {
     /// Returns the global perceptual hash from the center 32x32 region.
     ///
     /// This hash captures the overall structure of the image and is robust
-    /// to minor changes in compression and color adjustments.
+    /// to minor changes in compression and color adjustments. The algorithm
+    /// used (PHash or DHash) depends on which was specified when creating the fingerprint.
     #[inline]
-    pub fn global_phash(&self) -> u64 {
-        self.global_phash
+    pub fn global_hash(&self) -> u64 {
+        self.global_hash
     }
 
     /// Returns the 16 block-level perceptual hashes from a 4x4 grid.
@@ -63,7 +64,7 @@ impl ImageFingerprint {
     /// Returns a value from 0 (identical) to 64 (completely different).
     #[inline(always)]
     pub fn distance(&self, other: &ImageFingerprint) -> u32 {
-        (self.global_phash ^ other.global_phash).count_ones()
+        (self.global_hash ^ other.global_hash).count_ones()
     }
 
     /// Checks if this fingerprint is similar to another within a threshold.

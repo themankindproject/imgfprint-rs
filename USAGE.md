@@ -322,18 +322,18 @@ let hex = hex::encode(exact);
 println!("Exact hash: {}", hex);
 ```
 
-##### `global_phash()`
+##### `global_hash()`
 
 ```rust
-pub fn global_phash(&self) -> u64
+pub fn global_hash(&self) -> u64
 ```
 
-Returns the global perceptual hash from the center 32x32 region.
+Returns the global perceptual hash from the center 32x32 region. The algorithm used (PHash or DHash) depends on which was specified when creating the fingerprint.
 
 **Example:**
 ```rust
-let phash: u64 = fp.global_phash();
-println!("Perceptual hash: {:016x}", phash);
+let hash: u64 = fp.global_hash();
+println!("Perceptual hash: {:016x}", hash);
 ```
 
 ##### `block_hashes()`
@@ -449,8 +449,8 @@ let multi = ImageFingerprinter::fingerprint(&image_bytes)?;
 let phash = multi.phash();
 let dhash = multi.dhash();
 
-println!("PHash: {:016x}", phash.global_phash());
-println!("DHash: {:016x}", dhash.global_phash());
+println!("PHash: {:016x}", phash.global_hash());
+println!("DHash: {:016x}", dhash.global_hash());
 ```
 
 ##### `get()`

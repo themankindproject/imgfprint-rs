@@ -76,22 +76,22 @@ impl FingerprinterContext {
                 || Self::compute_dhash_data(&global_region, &blocks),
             );
 
-            let (global_phash, block_phashes) = phash_result;
+            let (global_hash, block_hashes) = phash_result;
             let (global_dhash, block_dhashes) = dhash_result;
 
             (
-                ImageFingerprint::new(exact_hash, global_phash, block_phashes),
+                ImageFingerprint::new(exact_hash, global_hash, block_hashes),
                 ImageFingerprint::new(exact_hash, global_dhash, block_dhashes),
             )
         };
 
         #[cfg(not(feature = "parallel"))]
         let (phash_fp, dhash_fp) = {
-            let (global_phash, block_phashes) = Self::compute_phash_data(&global_region, &blocks);
+            let (global_hash, block_hashes) = Self::compute_phash_data(&global_region, &blocks);
             let (global_dhash, block_dhashes) = Self::compute_dhash_data(&global_region, &blocks);
 
             (
-                ImageFingerprint::new(exact_hash, global_phash, block_phashes),
+                ImageFingerprint::new(exact_hash, global_hash, block_hashes),
                 ImageFingerprint::new(exact_hash, global_dhash, block_dhashes),
             )
         };
@@ -126,7 +126,7 @@ impl FingerprinterContext {
         global_region: &[f32; 32 * 32],
         blocks: &[[f32; 64 * 64]; 16],
     ) -> (u64, [u64; 16]) {
-        let global_phash = compute_phash(global_region);
+        let global_hash = compute_phash(global_region);
 
         #[cfg(feature = "parallel")]
         let block_hashes = {
@@ -147,7 +147,7 @@ impl FingerprinterContext {
             hashes
         };
 
-        (global_phash, block_hashes)
+        (global_hash, block_hashes)
     }
 
     fn compute_dhash_data(
