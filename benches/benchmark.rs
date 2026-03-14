@@ -41,6 +41,12 @@ fn benchmark_fingerprint_multi(c: &mut Criterion) {
 fn benchmark_fingerprint_single(c: &mut Criterion) {
     let img = create_test_image();
 
+    c.bench_function("fingerprint_single_ahash", |b| {
+        b.iter(|| {
+            let _ = ImageFingerprinter::fingerprint_with(black_box(&img), HashAlgorithm::AHash);
+        })
+    });
+
     c.bench_function("fingerprint_single_phash", |b| {
         b.iter(|| {
             let _ = ImageFingerprinter::fingerprint_with(black_box(&img), HashAlgorithm::PHash);
@@ -94,6 +100,15 @@ fn benchmark_batch_single(c: &mut Criterion) {
     let images: Vec<_> = (0..10)
         .map(|i| (format!("img{}", i), create_test_image()))
         .collect();
+
+    c.bench_function("fingerprint_batch_ahash_10", |b| {
+        b.iter(|| {
+            let _ = ImageFingerprinter::fingerprint_batch_with(
+                black_box(&images),
+                HashAlgorithm::AHash,
+            );
+        })
+    });
 
     c.bench_function("fingerprint_batch_phash_10", |b| {
         b.iter(|| {
@@ -177,6 +192,12 @@ fn benchmark_scaling(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("multi", size), size, |b, _| {
             b.iter(|| {
                 let _ = ImageFingerprinter::fingerprint(black_box(&img));
+            });
+        });
+
+        group.bench_with_input(BenchmarkId::new("ahash_only", size), size, |b, _| {
+            b.iter(|| {
+                let _ = ImageFingerprinter::fingerprint_with(black_box(&img), HashAlgorithm::AHash);
             });
         });
 
