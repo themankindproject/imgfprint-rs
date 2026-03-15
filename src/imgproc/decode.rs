@@ -6,7 +6,10 @@ use std::io::Cursor;
 
 const MAX_DIMENSION: u32 = 8192;
 const MIN_DIMENSION: u32 = 32;
-const MAX_INPUT_BYTES: usize = 50 * 1024 * 1024; // 50MB to prevent DoS
+
+/// Maximum input size: 50MB - prevents memory exhaustion from maliciously large inputs.
+/// This limit prevents OOM attacks while still allowing typical high-res images.
+const MAX_INPUT_BYTES: usize = 50 * 1024 * 1024;
 
 /// Decodes image bytes and validates dimensions.
 ///

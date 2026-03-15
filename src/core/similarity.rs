@@ -1,4 +1,5 @@
 use crate::core::fingerprint::ImageFingerprint;
+use subtle::ConstantTimeEq;
 
 /// Similarity score between two image fingerprints.
 ///
@@ -26,6 +27,7 @@ pub struct Similarity {
 impl Similarity {
     /// Returns a perfect similarity score (1.0, exact match).
     #[inline]
+    #[must_use]
     pub fn perfect() -> Self {
         Self {
             score: 1.0,
@@ -40,20 +42,29 @@ impl Similarity {
 /// Uses a weighted combination:
 /// - 40% weight on global perceptual hash similarity
 /// - 60% weight on block-level hash similarity (crop resistance)
+///
+/// Uses constant-time comparison to prevent timing attacks on exact match.
+#[must_use]
 pub fn compute_similarity(a: &ImageFingerprint, b: &ImageFingerprint) -> Similarity {
-    if a.exact == b.exact {
-        return Similarity::perfect();
-    }
+    let exact_match = a.exact.ct_eq(&b.exact).into();
 
     let global_distance = hamming_distance(a.global_hash, b.global_hash);
     let global_similarity = hash_similarity(global_distance);
     let block_similarity = compute_block_similarity(&a.block_hashes, &b.block_hashes);
     let combined_score = 0.4 * global_similarity + 0.6 * block_similarity;
 
-    Similarity {
-        score: combined_score,
-        exact_match: false,
-        perceptual_distance: global_distance,
+    if exact_match {
+        Similarity {
+            score: 1.0,
+            exact_match: true,
+            perceptual_distance: 0,
+        }
+    } else {
+        Similarity {
+            score: combined_score,
+            exact_match: false,
+            perceptual_distance: global_distance,
+        }
     }
 }
 

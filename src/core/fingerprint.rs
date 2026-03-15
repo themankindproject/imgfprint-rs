@@ -64,6 +64,7 @@ impl ImageFingerprint {
     ///
     /// Returns a value from 0 (identical) to 64 (completely different).
     #[inline(always)]
+    #[must_use]
     pub fn distance(&self, other: &ImageFingerprint) -> u32 {
         (self.global_hash ^ other.global_hash).count_ones()
     }
@@ -88,6 +89,7 @@ impl ImageFingerprint {
     /// ```
     #[doc(alias = "compare")]
     #[doc(alias = "match")]
+    #[must_use]
     pub fn is_similar(&self, other: &ImageFingerprint, threshold: f32) -> bool {
         debug_assert!(
             (0.0..=1.0).contains(&threshold),
@@ -174,16 +176,15 @@ impl MultiHashFingerprint {
     ///
     /// Returns a Similarity struct with combined score and component distances.
     ///
+    /// Uses constant-time comparison to prevent timing attacks on exact match.
+    ///
     /// # Arguments
     /// * `other` - The fingerprint to compare against
+    #[must_use]
     pub fn compare(&self, other: &MultiHashFingerprint) -> Similarity {
-        if self.exact == other.exact {
-            return Similarity {
-                score: 1.0,
-                exact_match: true,
-                perceptual_distance: 0,
-            };
-        }
+        use subtle::ConstantTimeEq;
+
+        let exact_match = self.exact.ct_eq(&other.exact).into();
 
         let ahash_dist = self.ahash.distance(&other.ahash);
         let phash_dist = self.phash.distance(&other.phash);
@@ -200,16 +201,25 @@ impl MultiHashFingerprint {
             + (phash_dist as f32 * PHASH_WEIGHT)
             + (dhash_dist as f32 * DHASH_WEIGHT)) as u32;
 
-        Similarity {
-            score: weighted_score.clamp(0.0, 1.0),
-            exact_match: false,
-            perceptual_distance: avg_distance,
+        if exact_match {
+            Similarity {
+                score: 1.0,
+                exact_match: true,
+                perceptual_distance: 0,
+            }
+        } else {
+            Similarity {
+                score: weighted_score.clamp(0.0, 1.0),
+                exact_match: false,
+                perceptual_distance: avg_distance,
+            }
         }
     }
 
     /// Checks if this fingerprint is similar to another within a threshold.
     ///
     /// Uses the weighted combination score from compare().
+    #[must_use]
     pub fn is_similar(&self, other: &MultiHashFingerprint, threshold: f32) -> bool {
         debug_assert!(
             (0.0..=1.0).contains(&threshold),

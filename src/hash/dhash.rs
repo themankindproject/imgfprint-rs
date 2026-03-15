@@ -84,9 +84,12 @@ fn resample_32x32_to_9x8(src: &[f32; 32 * 32], dst: &mut [f32; DHASH_SIZE]) {
 ///
 /// For each row, compares `pixel[i]` with `pixel[i+1]`.
 /// Sets bit to 1 if `pixel[i]` > `pixel[i+1]` (dark to light transition).
+/// Bits are ordered from MSB (bit 63) to LSB (bit 0) for consistent ordering.
 #[inline(always)]
 fn compute_hash_from_gradient(pixels: &[f32; DHASH_SIZE]) -> u64 {
     let mut hash = 0u64;
+    // Start from bit 63 (MSB) and count down to bit 0 (LSB)
+    // This ensures consistent bit ordering across all hash algorithms
     let mut bit_pos = 63u32;
 
     for y in 0..DHASH_HEIGHT {

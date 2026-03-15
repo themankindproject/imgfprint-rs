@@ -5,6 +5,14 @@ use fast_image_resize::images::Image;
 use fast_image_resize::{CpuExtensions, FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer};
 use image::{DynamicImage, GenericImageView, GrayImage};
 
+/// ITU-R BT.601 luma coefficients for RGB to grayscale conversion.
+/// These coefficients represent the relative luminance of each color channel.
+/// See https://en.wikipedia.org/wiki/YUV#SDTV_with_BT.601
+const LUMA_COEFF_R: u32 = 77;
+const LUMA_COEFF_G: u32 = 150;
+const LUMA_COEFF_B: u32 = 29;
+const LUMA_SHIFT: u32 = 8;
+
 const NORMALIZED_SIZE: u32 = 256;
 const BLOCK_SIZE: u32 = 64;
 const PHASH_SIZE: u32 = 32;
@@ -138,7 +146,10 @@ impl Preprocessor {
             let r = self.dst_buffer[i] as u32;
             let g = self.dst_buffer[i + 1] as u32;
             let b = self.dst_buffer[i + 2] as u32;
-            self.gray_buffer[i / 3] = ((77 * r + 150 * g + 29 * b) >> 8) as u8;
+            // ITU-R BT.601 luma conversion: Y = 0.299*R + 0.587*G + 0.114*B
+            // Implemented as integer arithmetic: (77*R + 150*G + 29*B) >> 8
+            self.gray_buffer[i / 3] =
+                ((LUMA_COEFF_R * r + LUMA_COEFF_G * g + LUMA_COEFF_B * b) >> LUMA_SHIFT) as u8;
         }
 
         let gray_buffer = std::mem::take(&mut self.gray_buffer);

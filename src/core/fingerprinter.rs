@@ -218,6 +218,29 @@ impl FingerprinterContext {
 
         (global_dhash, block_hashes)
     }
+
+    /// Computes fingerprints for multiple images in chunks to limit memory usage.
+    ///
+    /// Processes images in chunks of `chunk_size` and invokes the callback
+    /// for each result. This prevents unbounded memory consumption when
+    /// processing large batches.
+    pub fn fingerprint_batch_chunked<S, F>(
+        &mut self,
+        images: &[(S, Vec<u8>)],
+        chunk_size: usize,
+        mut callback: F,
+    ) where
+        S: Send + Sync + Clone + 'static,
+        F: FnMut(S, Result<MultiHashFingerprint, ImgFprintError>),
+    {
+        let chunk_size = chunk_size.max(1);
+        for chunk in images.chunks(chunk_size) {
+            for (id, bytes) in chunk {
+                let result = self.fingerprint(bytes);
+                callback(id.clone(), result);
+            }
+        }
+    }
 }
 
 /// Static methods for computing and comparing image fingerprints.
@@ -268,6 +291,7 @@ impl ImageFingerprinter {
     ///
     /// For MultiHashFingerprint, use the compare() method directly.
     /// For ImageFingerprint, this computes similarity using the global hash.
+    #[must_use]
     pub fn compare(a: &ImageFingerprint, b: &ImageFingerprint) -> similarity::Similarity {
         similarity::compute_similarity(a, b)
     }
@@ -346,6 +370,33 @@ impl ImageFingerprinter {
                 .iter()
                 .map(|(id, bytes)| (id.clone(), Self::fingerprint_with(bytes, algorithm)))
                 .collect()
+        }
+    }
+
+    /// Computes fingerprints for multiple images in chunks to limit memory usage.
+    ///
+    /// Processes images in chunks of `chunk_size` and invokes the callback
+    /// for each result. This prevents unbounded memory consumption when
+    /// processing large batches.
+    ///
+    /// # Arguments
+    /// * `images` - Slice of (id, image_bytes) pairs
+    /// * `chunk_size` - Number of images to process per chunk
+    /// * `callback` - Function called with each result as (id, Result<...>)
+    pub fn fingerprint_batch_chunked<S, F>(
+        images: &[(S, Vec<u8>)],
+        chunk_size: usize,
+        mut callback: F,
+    ) where
+        S: Send + Sync + Clone + 'static,
+        F: FnMut(S, Result<MultiHashFingerprint, ImgFprintError>),
+    {
+        let chunk_size = chunk_size.max(1);
+        for chunk in images.chunks(chunk_size) {
+            for (id, bytes) in chunk {
+                let result = Self::fingerprint(bytes);
+                callback(id.clone(), result);
+            }
         }
     }
 }

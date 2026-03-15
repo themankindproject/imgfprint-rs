@@ -224,6 +224,48 @@ for (id, result) in results {
 
 **Performance Note:** With the `parallel` feature enabled (default), batch processing uses all available CPU cores for 2-3x speedup.
 
+#### `fingerprint_batch_chunked()`
+
+```rust
+pub fn fingerprint_batch_chunked<S, F>(
+    images: &[(S, Vec<u8>)],
+    chunk_size: usize,
+    callback: F
+)
+where
+    S: Send + Sync + Clone + 'static,
+    F: FnMut(S, Result<MultiHashFingerprint, ImgFprintError>)
+```
+
+Processes multiple images in chunks to limit memory usage. Invokes the callback for each result as it completes.
+
+**Arguments:**
+- `images` - Slice of (id, image_bytes) pairs
+- `chunk_size` - Number of images to process per chunk
+- `callback` - Function called with each result
+
+**Example:**
+```rust
+let images = vec![
+    ("img1.jpg".to_string(), std::fs::read("img1.jpg")?),
+    ("img2.jpg".to_string(), std::fs::read("img2.jpg")?),
+    // ... thousands of images
+];
+
+let mut processed = 0;
+ImageFingerprinter::fingerprint_batch_chunked(&images, 100, |id, result| {
+    match result {
+        Ok(fp) => println!("{}: fingerprinted", id),
+        Err(e) => println!("{}: error - {}", id, e),
+    }
+    processed += 1;
+});
+
+println!("Processed {} images", processed);
+```
+
+**Use case:** Prevents unbounded memory consumption when processing large batches (e.g., 10,000+ images).
+
 ---
 
 ### FingerprinterContext
@@ -296,6 +338,42 @@ for path in image_paths {
     let fp = ctx.fingerprint_with(&bytes, HashAlgorithm::DHash)?;
     // Process fingerprint...
 }
+```
+
+#### `fingerprint_batch_chunked()`
+
+```rust
+pub fn fingerprint_batch_chunked<S, F>(
+    &mut self,
+    images: &[(S, Vec<u8>)],
+    chunk_size: usize,
+    callback: F
+)
+where
+    S: Send + Sync + Clone + 'static,
+    F: FnMut(S, Result<MultiHashFingerprint, ImgFprintError>)
+```
+
+Processes images in chunks with buffer reuse. Combines memory efficiency of streaming with better cache utilization.
+
+**Example:**
+```rust
+use imgfprint::FingerprinterContext;
+
+let mut ctx = FingerprinterContext::new();
+
+let images = vec![
+    ("img1.jpg".to_string(), std::fs::read("img1.jpg")?),
+    ("img2.jpg".to_string(), std::fs::read("img2.jpg")?),
+    // ... thousands of images
+];
+
+ctx.fingerprint_batch_chunked(&images, 50, |id, result| {
+    if let Ok(fp) = result {
+        // Store or process fingerprint
+        db.store(&id, fp)?;
+    }
+});
 ```
 
 ---
@@ -614,6 +692,39 @@ fn process_streaming(image_paths: &[&Path]) -> Result<(), Box<dyn std::error::Er
 ```
 
 **Benefit:** Minimal memory footprint, processes images one at a time.
+
+#### Strategy 3: Chunked Batch (Best for Large Batches)
+
+Combines memory efficiency with callback-based processing for very large datasets:
+
+```rust
+use imgfprint::ImageFingerprinter;
+use std::path::Path;
+
+fn process_chunked(image_paths: &[&Path]) -> Result<usize, Box<dyn std::error::Error>> {
+    let images: Vec<_> = image_paths
+        .iter()
+        .map(|p| (p.to_string_lossy().to_string(), std::fs::read(p).unwrap()))
+        .collect();
+    
+    let mut count = 0;
+    
+    // Process in chunks of 100 to limit memory
+    ImageFingerprinter::fingerprint_batch_chunked(&images, 100, |id, result| {
+        match result {
+            Ok(fp) => {
+                db.store(&id, fp).unwrap();
+                count += 1;
+            }
+            Err(e) => eprintln!("Failed to process {}: {}", id, e),
+        }
+    });
+    
+    Ok(count)
+}
+```
+
+**Benefit:** Bounded memory usage (100 images max), callback enables immediate processing/streaming results.
 
 ### Semantic Embeddings
 

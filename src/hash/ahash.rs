@@ -81,13 +81,15 @@ fn resample_32x32_to_8x8(src: &[f32; 32 * 32], dst: &mut [f32; TOTAL_PIXELS]) {
 /// Computes hash by comparing each pixel to the mean brightness.
 ///
 /// Sets bit to 1 if pixel >= mean, 0 otherwise.
-/// Bits are ordered from MSB (top-left pixel) to LSB (bottom-right).
+/// Bits are ordered from MSB (bit 63) to LSB (bit 0) for top-left to bottom-right pixels.
 #[inline(always)]
 fn compute_hash_from_mean(pixels: &[f32; TOTAL_PIXELS]) -> u64 {
     let sum: f32 = pixels.iter().sum();
     let mean = sum / TOTAL_PIXELS as f32;
 
     let mut hash = 0u64;
+    // Start from bit 63 (MSB) and count down to bit 0 (LSB)
+    // This ensures consistent bit ordering across all hash algorithms
     let mut bit_pos = 63u32;
 
     for y in 0..AHASH_SIZE {

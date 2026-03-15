@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New `MultiHashFingerprint::ahash()` accessor
   - Parallel computation of all three algorithms
 
+- **Chunked batch processing**: New `fingerprint_batch_chunked()` method
+  - Processes images in configurable chunks to limit memory usage
+  - Callback-based API for immediate result processing
+  - Available on both `ImageFingerprinter` and `FingerprinterContext`
+  - Prevents unbounded memory consumption when processing large batches
+
 ### Changed
 
 - Replaced SHA2 with BLAKE3 for exact hashing
