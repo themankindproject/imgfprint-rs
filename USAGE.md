@@ -108,7 +108,7 @@ Computes **AHash, PHash, and DHash** in parallel for maximum accuracy.
 
 **Returns:**
 - `MultiHashFingerprint` containing:
-  - SHA256 hash of original bytes (exact matching)
+  - BLAKE3 hash of original bytes (exact matching)
   - AHash results: global + 16 block hashes
   - PHash results: global + 16 block hashes
   - DHash results: global + 16 block hashes
@@ -171,7 +171,7 @@ Compares two fingerprints and returns a similarity score.
 **Returns:**
 - `Similarity` struct with:
   - `score`: 0.0 (different) to 1.0 (identical)
-  - `exact_match`: true if SHA256 hashes match
+  - `exact_match`: true if BLAKE3 hashes match
   - `perceptual_distance`: Hamming distance 0-64
 
 **Example:**
@@ -312,7 +312,7 @@ A perceptual fingerprint containing multiple hash layers for robust comparison.
 pub fn exact_hash(&self) -> &[u8; 32]
 ```
 
-Returns the SHA256 hash of original image bytes.
+Returns the BLAKE3 hash of original image bytes.
 
 **Use case:** Exact deduplication before perceptual comparison (much faster).
 
@@ -410,7 +410,7 @@ if fp1.is_similar(&fp2, 0.5) {
 }
 ```
 
-**Note:** A threshold of 1.0 requires exact match (both SHA256 and perceptual hash identical).
+**Note:** A threshold of 1.0 requires exact match (both BLAKE3 and perceptual hash identical).
 
 ---
 
@@ -426,7 +426,7 @@ A multi-algorithm fingerprint containing AHash, PHash, and DHash results for enh
 pub fn exact_hash(&self) -> &[u8; 32]
 ```
 
-Returns the SHA256 hash of original image bytes.
+Returns the BLAKE3 hash of original image bytes.
 
 ##### `ahash()`
 
@@ -532,7 +532,7 @@ Similarity score between two image fingerprints.
 | Field | Type | Description |
 |-------|------|-------------|
 | `score` | `f32` | Similarity 0.0 (different) to 1.0 (identical) |
-| `exact_match` | `bool` | True if SHA256 hashes match |
+| `exact_match` | `bool` | True if BLAKE3 hashes match |
 | `perceptual_distance` | `u32` | Hamming distance 0-64 |
 
 #### Methods
@@ -789,7 +789,7 @@ let results = ImageFingerprinter::fingerprint_batch(&images);
 ### 3. Check Exact Hash First
 
 ```rust
-// Fast path: exact byte match (SHA256 comparison)
+// Fast path: exact byte match (BLAKE3 comparison)
 if fp1.exact_hash() == fp2.exact_hash() {
     return Similarity::perfect();
 }

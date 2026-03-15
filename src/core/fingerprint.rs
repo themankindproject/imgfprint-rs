@@ -167,7 +167,11 @@ impl MultiHashFingerprint {
 
     /// Compares two multi-hash fingerprints using weighted combination.
     ///
-    /// Uses AHash (25%), PHash (40%) and DHash (35%) weights to compute overall similarity.
+    /// Uses weighted combination:
+    /// - 10% AHash similarity (average hash, fastest)
+    /// - 60% PHash similarity (DCT-based, robust to compression)
+    /// - 30% DHash similarity (gradient-based, good for structural changes)
+    ///
     /// Returns a Similarity struct with combined score and component distances.
     ///
     /// # Arguments

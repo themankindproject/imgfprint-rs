@@ -91,6 +91,8 @@ impl Preprocessor {
         // Reuse destination buffer to avoid allocation
         #[allow(clippy::uninit_vec)]
         unsafe {
+            // Safety: We just reserved exactly target_len bytes, so set_len is safe.
+            // The buffer contains uninitialized bytes which are always valid for u8.
             self.dst_buffer.clear();
             let target_len = (NORMALIZED_SIZE * NORMALIZED_SIZE * 3) as usize;
             self.dst_buffer.reserve(target_len);
@@ -124,6 +126,8 @@ impl Preprocessor {
         // Reuse grayscale buffer
         #[allow(clippy::uninit_vec)]
         unsafe {
+            // Safety: We just reserved exactly gray_target_len bytes, so set_len is safe.
+            // The buffer contains uninitialized bytes which are always valid for u8.
             self.gray_buffer.clear();
             let gray_target_len = (NORMALIZED_SIZE * NORMALIZED_SIZE) as usize;
             self.gray_buffer.reserve(gray_target_len);
@@ -142,6 +146,8 @@ impl Preprocessor {
             gray_buffer.len(),
             (NORMALIZED_SIZE * NORMALIZED_SIZE) as usize
         );
+        // Safety: We verified gray_buffer.len() == NORMALIZED_SIZE^2 above.
+        // from_raw only fails if dimensions overflow, which is impossible here.
         Ok(unsafe {
             GrayImage::from_raw(NORMALIZED_SIZE, NORMALIZED_SIZE, gray_buffer).unwrap_unchecked()
         })

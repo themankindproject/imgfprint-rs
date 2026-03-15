@@ -16,7 +16,7 @@ use std::cell::RefCell;
 /// to minimize allocations in high-throughput scenarios.
 pub struct FingerprinterContext {
     preprocessor: Preprocessor,
-    sha_hasher: Hasher,
+    exact_hasher: Hasher,
 }
 
 impl Default for FingerprinterContext {
@@ -30,7 +30,7 @@ impl FingerprinterContext {
     pub fn new() -> Self {
         Self {
             preprocessor: Preprocessor::new(),
-            sha_hasher: Hasher::new(),
+            exact_hasher: Hasher::new(),
         }
     }
 
@@ -60,9 +60,9 @@ impl FingerprinterContext {
         &mut self,
         image_bytes: &[u8],
     ) -> Result<MultiHashFingerprint, ImgFprintError> {
-        self.sha_hasher.reset();
-        self.sha_hasher.update(image_bytes);
-        let exact_hash: [u8; 32] = *self.sha_hasher.finalize().as_bytes();
+        self.exact_hasher.reset();
+        self.exact_hasher.update(image_bytes);
+        let exact_hash: [u8; 32] = *self.exact_hasher.finalize().as_bytes();
 
         let image = decode_image(image_bytes)?;
         let normalized = self.preprocessor.normalize(&image)?;
@@ -116,9 +116,9 @@ impl FingerprinterContext {
         image_bytes: &[u8],
         algorithm: HashAlgorithm,
     ) -> Result<ImageFingerprint, ImgFprintError> {
-        self.sha_hasher.reset();
-        self.sha_hasher.update(image_bytes);
-        let exact_hash: [u8; 32] = *self.sha_hasher.finalize().as_bytes();
+        self.exact_hasher.reset();
+        self.exact_hasher.update(image_bytes);
+        let exact_hash: [u8; 32] = *self.exact_hasher.finalize().as_bytes();
 
         let image = decode_image(image_bytes)?;
         let normalized = self.preprocessor.normalize(&image)?;
