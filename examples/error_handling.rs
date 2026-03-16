@@ -10,7 +10,7 @@ fn main() {
 
     for (name, bytes) in test_cases {
         match ImageFingerprinter::fingerprint(&bytes) {
-            Ok(fp) => println!("{}: unexpectedly succeeded", name),
+            Ok(_fp) => println!("{}: unexpectedly succeeded", name),
             Err(e) => {
                 let error_type = match &e {
                     ImgFprintError::DecodeError(_) => "DecodeError",
