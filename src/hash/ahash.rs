@@ -3,6 +3,8 @@
 //! Algorithm: Resize to 8x8, compute mean, compare each pixel to mean.
 //! Each pixel produces 1 bit. Total: 8×8 = 64-bit hash.
 
+use crate::imgproc::preprocess::bilinear_resample;
+
 const AHASH_SIZE: usize = 8;
 const TOTAL_PIXELS: usize = AHASH_SIZE * AHASH_SIZE;
 
@@ -16,7 +18,7 @@ const TOTAL_PIXELS: usize = AHASH_SIZE * AHASH_SIZE;
 pub fn compute_ahash(pixels: &[f32; 32 * 32]) -> u64 {
     let mut small = [0.0f32; TOTAL_PIXELS];
 
-    resample_32x32_to_8x8(pixels, &mut small);
+    bilinear_resample(pixels, 32, 32, &mut small, AHASH_SIZE, AHASH_SIZE);
 
     compute_hash_from_mean(&small)
 }
@@ -25,57 +27,11 @@ pub fn compute_ahash(pixels: &[f32; 32 * 32]) -> u64 {
 #[inline]
 pub fn compute_ahash_from_64x64(block: &[f32; 64 * 64]) -> u64 {
     let mut downsampled = [0.0f32; 32 * 32];
-    const FACTOR: f32 = 1.0 / 4.0;
-
-    for y in 0..32 {
-        let src_y = y * 2;
-        for x in 0..32 {
-            let src_x = x * 2;
-            let idx = y * 32 + x;
-            let base = src_y * 64 + src_x;
-
-            downsampled[idx] =
-                (block[base] + block[base + 1] + block[base + 64] + block[base + 65]) * FACTOR;
-        }
-    }
+    
+    // First downsample 64x64 to 32x32 using bilinear resampling
+    bilinear_resample(block, 64, 64, &mut downsampled, 32, 32);
 
     compute_ahash(&downsampled)
-}
-
-/// Resamples 32x32 buffer to 8x8 using bilinear interpolation.
-#[inline(always)]
-fn resample_32x32_to_8x8(src: &[f32; 32 * 32], dst: &mut [f32; TOTAL_PIXELS]) {
-    let x_ratio = 32.0 / 8.0;
-    let y_ratio = 32.0 / 8.0;
-
-    for y in 0..AHASH_SIZE {
-        let src_y = y as f32 * y_ratio;
-        let y0 = src_y as usize;
-        let y1 = (y0 + 1).min(31);
-        let dy = src_y - y0 as f32;
-
-        for x in 0..AHASH_SIZE {
-            let src_x = x as f32 * x_ratio;
-            let x0 = src_x as usize;
-            let x1 = (x0 + 1).min(31);
-            let dx = src_x - x0 as f32;
-
-            let i00 = y0 * 32 + x0;
-            let i01 = y0 * 32 + x1;
-            let i10 = y1 * 32 + x0;
-            let i11 = y1 * 32 + x1;
-
-            let v00 = src[i00];
-            let v01 = src[i01];
-            let v10 = src[i10];
-            let v11 = src[i11];
-
-            let v0 = v00 + (v01 - v00) * dx;
-            let v1 = v10 + (v11 - v10) * dx;
-
-            dst[y * AHASH_SIZE + x] = v0 + (v1 - v0) * dy;
-        }
-    }
 }
 
 /// Computes hash by comparing each pixel to the mean brightness.
@@ -171,5 +127,117 @@ mod tests {
 
         let hash = compute_ahash(&img);
         assert_eq!(hash, u64::MAX);
+    }
+
+    #[test]
+    fn test_ahash_gradient_horizontal() {
+        let mut img = [0.0f32; 32 * 32];
+        for y in 0..32 {
+            for x in 0..32 {
+                img[y * 32 + x] = x as f32 / 31.0;
+            }
+        }
+        let hash = compute_ahash(&img);
+        assert_ne!(hash, 0);
+    }
+
+    #[test]
+    fn test_ahash_gradient_vertical() {
+        let mut img = [0.0f32; 32 * 32];
+        for y in 0..32 {
+            for x in 0..32 {
+                img[y * 32 + x] = y as f32 / 31.0;
+            }
+        }
+        let hash = compute_ahash(&img);
+        assert_ne!(hash, 0);
+    }
+
+    #[test]
+    fn test_ahash_checkerboard_pattern() {
+        let mut img = [0.0f32; 32 * 32];
+        for y in 0..32 {
+            for x in 0..32 {
+                img[y * 32 + x] = if (x + y) % 2 == 0 { 0.0 } else { 1.0 };
+            }
+        }
+        let hash = compute_ahash(&img);
+        assert_ne!(hash, 0);
+    }
+
+    #[test]
+    fn test_ahash_from_64x64_deterministic() {
+        let block: [f32; 64 * 64] = std::array::from_fn(|i| (i % 256) as f32 / 255.0);
+        let h1 = compute_ahash_from_64x64(&block);
+        let h2 = compute_ahash_from_64x64(&block);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_ahash_from_64x64_uniform() {
+        let block: [f32; 64 * 64] = [0.5; 64 * 64];
+        let hash = compute_ahash_from_64x64(&block);
+        assert_eq!(hash, u64::MAX);
+    }
+
+    #[test]
+    fn test_compute_hash_from_mean_uniform() {
+        let pixels = [0.5f32; TOTAL_PIXELS];
+        let hash = compute_hash_from_mean(&pixels);
+        assert_eq!(hash, u64::MAX);
+    }
+
+    #[test]
+    fn test_compute_hash_from_mean_all_zeros() {
+        let pixels = [0.0f32; TOTAL_PIXELS];
+        let hash = compute_hash_from_mean(&pixels);
+        assert_eq!(hash, u64::MAX);
+    }
+
+    #[test]
+    fn test_compute_hash_from_mean_all_ones() {
+        let pixels = [1.0f32; TOTAL_PIXELS];
+        let hash = compute_hash_from_mean(&pixels);
+        assert_eq!(hash, u64::MAX);
+    }
+
+    #[test]
+    fn test_compute_hash_from_mean_half_half() {
+        let mut pixels = [0.0f32; TOTAL_PIXELS];
+        for i in 0..TOTAL_PIXELS / 2 {
+            pixels[i] = 0.0;
+        }
+        for i in TOTAL_PIXELS / 2..TOTAL_PIXELS {
+            pixels[i] = 1.0;
+        }
+        let hash = compute_hash_from_mean(&pixels);
+        assert_ne!(hash, 0);
+        assert_ne!(hash, u64::MAX);
+    }
+
+    #[test]
+    fn test_compute_hash_from_mean_bit_ordering() {
+        let mut pixels = [0.0f32; TOTAL_PIXELS];
+        for i in 0..TOTAL_PIXELS {
+            pixels[i] = i as f32 / TOTAL_PIXELS as f32;
+        }
+        let hash = compute_hash_from_mean(&pixels);
+        assert_ne!(hash, 0);
+    }
+
+    #[test]
+    fn test_ahash_similar_images() {
+        let mut img1 = [0.5f32; 32 * 32];
+        let mut img2 = [0.5f32; 32 * 32];
+        
+        for i in 0..img1.len() {
+            img1[i] = (i % 128) as f32 / 255.0;
+            img2[i] = (i % 128 + 2) as f32 / 255.0;
+        }
+        
+        let h1 = compute_ahash(&img1);
+        let h2 = compute_ahash(&img2);
+        let distance = (h1 ^ h2).count_ones();
+        assert!(distance < 32, "Similar images should have low Hamming distance, got {}", distance);
     }
 }

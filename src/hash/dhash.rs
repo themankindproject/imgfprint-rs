@@ -4,6 +4,8 @@
 //! Each row produces 8 bits (9 pixels compared pairwise).
 //! Total: 8 rows × 8 bits = 64-bit hash.
 
+use crate::imgproc::preprocess::bilinear_resample;
+
 const DHASH_WIDTH: usize = 9;
 const DHASH_HEIGHT: usize = 8;
 const DHASH_SIZE: usize = DHASH_WIDTH * DHASH_HEIGHT;
@@ -18,7 +20,7 @@ const DHASH_SIZE: usize = DHASH_WIDTH * DHASH_HEIGHT;
 pub fn compute_dhash(pixels: &[f32; 32 * 32]) -> u64 {
     let mut small = [0.0f32; DHASH_SIZE];
 
-    resample_32x32_to_9x8(pixels, &mut small);
+    bilinear_resample(pixels, 32, 32, &mut small, DHASH_WIDTH, DHASH_HEIGHT);
 
     compute_hash_from_gradient(&small)
 }
@@ -27,57 +29,11 @@ pub fn compute_dhash(pixels: &[f32; 32 * 32]) -> u64 {
 #[inline]
 pub fn compute_dhash_from_64x64(block: &[f32; 64 * 64]) -> u64 {
     let mut downsampled = [0.0f32; 32 * 32];
-    const FACTOR: f32 = 1.0 / 4.0;
-
-    for y in 0..32 {
-        let src_y = y * 2;
-        for x in 0..32 {
-            let src_x = x * 2;
-            let idx = y * 32 + x;
-            let base = src_y * 64 + src_x;
-
-            downsampled[idx] =
-                (block[base] + block[base + 1] + block[base + 64] + block[base + 65]) * FACTOR;
-        }
-    }
+    
+    // First downsample 64x64 to 32x32 using bilinear resampling
+    bilinear_resample(block, 64, 64, &mut downsampled, 32, 32);
 
     compute_dhash(&downsampled)
-}
-
-/// Resamples 32x32 buffer to 9x8 using bilinear interpolation.
-#[inline(always)]
-fn resample_32x32_to_9x8(src: &[f32; 32 * 32], dst: &mut [f32; DHASH_SIZE]) {
-    let x_ratio = 32.0 / 9.0;
-    let y_ratio = 32.0 / 8.0;
-
-    for y in 0..DHASH_HEIGHT {
-        let src_y = y as f32 * y_ratio;
-        let y0 = src_y as usize;
-        let y1 = (y0 + 1).min(31);
-        let dy = src_y - y0 as f32;
-
-        for x in 0..DHASH_WIDTH {
-            let src_x = x as f32 * x_ratio;
-            let x0 = src_x as usize;
-            let x1 = (x0 + 1).min(31);
-            let dx = src_x - x0 as f32;
-
-            let i00 = y0 * 32 + x0;
-            let i01 = y0 * 32 + x1;
-            let i10 = y1 * 32 + x0;
-            let i11 = y1 * 32 + x1;
-
-            let v00 = src[i00];
-            let v01 = src[i01];
-            let v10 = src[i10];
-            let v11 = src[i11];
-
-            let v0 = v00 + (v01 - v00) * dx;
-            let v1 = v10 + (v11 - v10) * dx;
-
-            dst[y * DHASH_WIDTH + x] = v0 + (v1 - v0) * dy;
-        }
-    }
 }
 
 /// Computes hash by comparing adjacent pixels horizontally.
@@ -151,5 +107,121 @@ mod tests {
 
         let hash = compute_dhash_from_64x64(&block);
         let _ = hash;
+    }
+
+    #[test]
+    fn test_dhash_uniform_image() {
+        let img: [f32; 32 * 32] = [0.5; 32 * 32];
+        let hash = compute_dhash(&img);
+        assert_eq!(hash, 0);
+    }
+
+    #[test]
+    fn test_dhash_all_zeros() {
+        let img: [f32; 32 * 32] = [0.0; 32 * 32];
+        let hash = compute_dhash(&img);
+        assert_eq!(hash, 0);
+    }
+
+    #[test]
+    fn test_dhash_all_ones() {
+        let img: [f32; 32 * 32] = [1.0; 32 * 32];
+        let hash = compute_dhash(&img);
+        assert_eq!(hash, 0);
+    }
+
+    #[test]
+    fn test_dhash_gradient_horizontal() {
+        let mut img = [0.0f32; 32 * 32];
+        for y in 0..32 {
+            for x in 0..32 {
+                img[y * 32 + x] = x as f32 / 31.0;
+            }
+        }
+        let hash = compute_dhash(&img);
+        assert_eq!(hash, 0);
+    }
+
+    #[test]
+    fn test_dhash_gradient_vertical() {
+        let mut img = [0.0f32; 32 * 32];
+        for y in 0..32 {
+            for x in 0..32 {
+                img[y * 32 + x] = y as f32 / 31.0;
+            }
+        }
+        let hash = compute_dhash(&img);
+        let _ = hash;
+    }
+
+    #[test]
+    fn test_dhash_checkerboard_pattern() {
+        let mut img = [0.0f32; 32 * 32];
+        for y in 0..32 {
+            for x in 0..32 {
+                img[y * 32 + x] = if (x + y) % 2 == 0 { 0.0 } else { 1.0 };
+            }
+        }
+        let hash = compute_dhash(&img);
+        assert_ne!(hash, 0);
+    }
+
+    #[test]
+    fn test_dhash_bit_ordering() {
+        let mut img1 = [0.0f32; 32 * 32];
+        let mut img2 = [0.0f32; 32 * 32];
+        
+        for i in 0..img1.len() {
+            img1[i] = (i % 128) as f32 / 255.0;
+            img2[i] = (i % 128 + 1) as f32 / 255.0;
+        }
+        
+        let h1 = compute_dhash(&img1);
+        let h2 = compute_dhash(&img2);
+        
+        let distance = (h1 ^ h2).count_ones();
+        assert!(distance < 32, "Similar images should have low Hamming distance, got {}", distance);
+    }
+
+    #[test]
+    fn test_dhash_from_64x64_deterministic() {
+        let block: [f32; 64 * 64] = std::array::from_fn(|i| (i % 256) as f32 / 255.0);
+        let h1 = compute_dhash_from_64x64(&block);
+        let h2 = compute_dhash_from_64x64(&block);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_dhash_from_64x64_uniform() {
+        let block: [f32; 64 * 64] = [0.5; 64 * 64];
+        let hash = compute_dhash_from_64x64(&block);
+        assert_eq!(hash, 0);
+    }
+
+    #[test]
+    fn test_compute_hash_from_gradient_uniform() {
+        let pixels = [0.5f32; DHASH_SIZE];
+        let hash = compute_hash_from_gradient(&pixels);
+        assert_eq!(hash, 0);
+    }
+
+    #[test]
+    fn test_compute_hash_from_gradient_ascending() {
+        let mut pixels = [0.0f32; DHASH_SIZE];
+        for i in 0..DHASH_SIZE {
+            pixels[i] = i as f32 / DHASH_SIZE as f32;
+        }
+        let hash = compute_hash_from_gradient(&pixels);
+        assert_eq!(hash, 0);
+    }
+
+    #[test]
+    fn test_compute_hash_from_gradient_descending() {
+        let mut pixels = [1.0f32; DHASH_SIZE];
+        for i in 0..DHASH_SIZE {
+            pixels[i] = 1.0 - (i as f32 / DHASH_SIZE as f32);
+        }
+        let hash = compute_hash_from_gradient(&pixels);
+        assert_ne!(hash, 0);
     }
 }

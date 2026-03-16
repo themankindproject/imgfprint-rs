@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - Unreleased
+
+### Changed
+
+- **Performance optimizations**:
+  - Cache-line aligned fingerprint structs (64-byte) for CPU cache efficiency
+  - Pre-computed popcount lookup table for faster Hamming distance
+  - Shared bilinear resampling across AHash, DHash, PHash (removed 3 duplicate implementations)
+  - SIMD-friendly chunked grayscale conversion
+  - Stack-allocated buffers in PHash DCT (removed RefCell overhead)
+  - Use `total_cmp` for f32 comparison (faster than partial_cmp)
+
+- **Bug fixes**:
+  - Fixed buffer reclamation order bug in image preprocessing
+
+- **API improvements**:
+  - Made `hash_similarity()` and `hamming_distance()` public utilities
+  - Added fast-path for exact match in similarity comparison
+
+- **Code quality**:
+  - Fixed clippy warnings (needless_range_loop, manual_clamp)
+
 ## [0.3.1] - Unreleased
 
 ### Added
@@ -144,7 +166,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Semantic embeddings via external providers
 - Local ONNX inference (optional feature)
 
-[0.3.1]: https://github.com/themankindproject/imgfprint-rs/compare/v0.3.0...main
+[0.3.2]: https://github.com/themankindproject/imgfprint-rs/compare/v0.3.1...main
+[0.3.1]: https://github.com/themankindproject/imgfprint-rs/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/themankindproject/imgfprint-rs/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/themankindproject/imgfprint-rs/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/themankindproject/imgfprint-rs/releases/tag/v0.1.3

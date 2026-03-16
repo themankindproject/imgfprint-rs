@@ -164,17 +164,9 @@ impl Embedding {
     /// # }
     /// ```
     #[inline]
+    #[allow(clippy::len_without_is_empty)] // Valid embeddings are never empty
     pub fn len(&self) -> usize {
         self.vector.len()
-    }
-
-    /// Returns true if the embedding is empty (should never happen for valid embeddings).
-    ///
-    /// This method exists for API completeness. Valid embeddings created
-    /// via [`new()`](Embedding::new) are guaranteed to be non-empty.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.vector.is_empty()
     }
 
     /// Returns the dimensionality of the embedding.
@@ -520,18 +512,12 @@ mod tests {
     }
 
     #[test]
-    fn test_embedding_is_empty() {
-        // Valid embeddings are never empty
-        let emb = Embedding::new(vec![1.0]).unwrap();
-        assert!(!emb.is_empty());
-    }
-
-    #[test]
     fn test_embedding_clone() {
         let a = emb(vec![0.1, 0.2, 0.3]);
         let b = a.clone();
 
         assert_eq!(a.as_slice(), b.as_slice());
+        assert_eq!(a.len(), b.len());
     }
 
     #[test]

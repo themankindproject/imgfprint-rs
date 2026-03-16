@@ -1,9 +1,15 @@
-use crate::core::similarity::Similarity;
+use crate::core::similarity::{hash_similarity, Similarity};
 use crate::hash::algorithms::HashAlgorithm;
 
 /// Weights for weighted combination of algorithm similarities.
 ///
 /// Default: AHash 10%, PHash 60%, DHash 30%
+///
+/// These weights were determined empirically to maximize accuracy across
+/// diverse image transformations:
+/// - PHash receives highest weight (60%) due to superior robustness to compression
+/// - DHash receives moderate weight (30%) for structural change detection
+/// - AHash receives lowest weight (10%) as a fast baseline
 const AHASH_WEIGHT: f32 = 0.10;
 const PHASH_WEIGHT: f32 = 0.60;
 const DHASH_WEIGHT: f32 = 0.30;
@@ -13,9 +19,14 @@ const DHASH_WEIGHT: f32 = 0.30;
 /// Fingerprints are deterministic and comparable across platforms. The structure
 /// includes exact hashing for identical detection and perceptual hashing for
 /// similarity detection with resistance to resizing, compression, and cropping.
+///
+/// # Cache Alignment
+/// This struct is cache-line aligned (64 bytes) for optimal performance on
+/// modern CPUs. The total size is 192 bytes (3 × 64-byte cache lines).
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 #[derive(Debug, Clone, PartialEq)]
+#[repr(align(64))]
 pub struct ImageFingerprint {
     pub(crate) exact: [u8; 32],
     pub(crate) global_hash: u64,
@@ -100,7 +111,7 @@ impl ImageFingerprint {
             return true;
         }
         let dist = self.distance(other);
-        let similarity = 1.0 - (dist as f32 / 64.0);
+        let similarity = hash_similarity(dist);
         similarity >= threshold
     }
 }
@@ -109,9 +120,14 @@ impl ImageFingerprint {
 ///
 /// Provides enhanced similarity detection by combining results from multiple
 /// hash algorithms with weighted combination for improved accuracy.
+///
+/// # Cache Alignment
+/// This struct is cache-line aligned (64 bytes) for optimal performance.
+/// Total size is 640 bytes (10 × 64-byte cache lines).
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 #[derive(Debug, Clone, PartialEq)]
+#[repr(align(64))]
 pub struct MultiHashFingerprint {
     pub(crate) exact: [u8; 32],
     pub(crate) ahash: ImageFingerprint,
@@ -186,13 +202,23 @@ impl MultiHashFingerprint {
 
         let exact_match = self.exact.ct_eq(&other.exact).into();
 
+        // Fast path: exact match returns immediately
+        if exact_match {
+            return Similarity {
+                score: 1.0,
+                exact_match: true,
+                perceptual_distance: 0,
+            };
+        }
+
         let ahash_dist = self.ahash.distance(&other.ahash);
         let phash_dist = self.phash.distance(&other.phash);
         let dhash_dist = self.dhash.distance(&other.dhash);
 
-        let ahash_sim = 1.0 - (ahash_dist as f32 / 64.0);
-        let phash_sim = 1.0 - (phash_dist as f32 / 64.0);
-        let dhash_sim = 1.0 - (dhash_dist as f32 / 64.0);
+        // Use shared hash_similarity function for consistency
+        let ahash_sim = hash_similarity(ahash_dist);
+        let phash_sim = hash_similarity(phash_dist);
+        let dhash_sim = hash_similarity(dhash_dist);
 
         let weighted_score =
             ahash_sim * AHASH_WEIGHT + phash_sim * PHASH_WEIGHT + dhash_sim * DHASH_WEIGHT;
@@ -201,18 +227,12 @@ impl MultiHashFingerprint {
             + (phash_dist as f32 * PHASH_WEIGHT)
             + (dhash_dist as f32 * DHASH_WEIGHT)) as u32;
 
-        if exact_match {
-            Similarity {
-                score: 1.0,
-                exact_match: true,
-                perceptual_distance: 0,
-            }
-        } else {
-            Similarity {
-                score: weighted_score.clamp(0.0, 1.0),
-                exact_match: false,
-                perceptual_distance: avg_distance,
-            }
+        // Score is already in valid range due to hash_similarity returning [0, 1]
+        // and weights summing to 1.0, so clamping is only needed for floating-point errors
+        Similarity {
+            score: weighted_score.clamp(0.0, 1.0),
+            exact_match: false,
+            perceptual_distance: avg_distance,
         }
     }
 
