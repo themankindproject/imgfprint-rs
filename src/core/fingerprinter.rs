@@ -553,8 +553,9 @@ mod tests {
     use image::{ImageBuffer, Rgb};
 
     fn create_test_image(width: u32, height: u32) -> Vec<u8> {
-        let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
-            ImageBuffer::from_fn(width, height, |x, y| Rgb([(x % 256) as u8, (y % 256) as u8, 128]));
+        let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(width, height, |x, y| {
+            Rgb([(x % 256) as u8, (y % 256) as u8, 128])
+        });
         let mut buf = Vec::new();
         img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
             .unwrap();
@@ -585,10 +586,10 @@ mod tests {
     fn test_fingerprinter_context_determinism() {
         let mut ctx = FingerprinterContext::new();
         let img = create_test_image(100, 100);
-        
+
         let fp1 = ctx.fingerprint(&img).unwrap();
         let fp2 = ctx.fingerprint(&img).unwrap();
-        
+
         assert_eq!(fp1.exact_hash(), fp2.exact_hash());
     }
 
@@ -596,7 +597,7 @@ mod tests {
     fn test_fingerprinter_context_fingerprint_with() {
         let mut ctx = FingerprinterContext::new();
         let img = create_test_image(100, 100);
-        
+
         let result = ctx.fingerprint_with(&img, HashAlgorithm::PHash);
         assert!(result.is_ok());
     }
@@ -613,7 +614,7 @@ mod tests {
         let img = create_test_image(100, 100);
         let images = vec![(0, img)];
         let results = ImageFingerprinter::fingerprint_batch(&images);
-        
+
         assert_eq!(results.len(), 1);
         assert!(results[0].1.is_ok());
     }
@@ -621,11 +622,16 @@ mod tests {
     #[test]
     fn test_fingerprinter_batch_multiple_images() {
         let images: Vec<(usize, Vec<u8>)> = (0..5usize)
-            .map(|i| (i, create_test_image(100 + i as u32 * 10, 100 + i as u32 * 10)))
+            .map(|i| {
+                (
+                    i,
+                    create_test_image(100 + i as u32 * 10, 100 + i as u32 * 10),
+                )
+            })
             .collect();
-        
+
         let results = ImageFingerprinter::fingerprint_batch(&images);
-        
+
         assert_eq!(results.len(), 5);
         for (i, result) in results.iter().enumerate() {
             assert_eq!(result.0, i);
@@ -637,10 +643,10 @@ mod tests {
     fn test_fingerprinter_batch_determinism() {
         let img = create_test_image(100, 100);
         let images = vec![(0, img.clone()), (1, img.clone())];
-        
+
         let results1 = ImageFingerprinter::fingerprint_batch(&images);
         let results2 = ImageFingerprinter::fingerprint_batch(&images);
-        
+
         assert_eq!(results1.len(), results2.len());
         for (r1, r2) in results1.iter().zip(results2.iter()) {
             let fp1 = r1.1.as_ref().unwrap();
@@ -661,9 +667,9 @@ mod tests {
         let images: Vec<(usize, Vec<u8>)> = (0..3usize)
             .map(|i| (i, create_test_image(100, 100)))
             .collect();
-        
+
         let results = ImageFingerprinter::fingerprint_batch_with(&images, HashAlgorithm::PHash);
-        
+
         assert_eq!(results.len(), 3);
         for result in &results {
             assert!(result.1.is_ok());
@@ -675,9 +681,9 @@ mod tests {
         let images: Vec<(usize, Vec<u8>)> = (0..3usize)
             .map(|i| (i, create_test_image(100, 100)))
             .collect();
-        
+
         let results = ImageFingerprinter::fingerprint_batch_with(&images, HashAlgorithm::DHash);
-        
+
         assert_eq!(results.len(), 3);
         for result in &results {
             assert!(result.1.is_ok());
@@ -689,9 +695,9 @@ mod tests {
         let images: Vec<(usize, Vec<u8>)> = (0..3usize)
             .map(|i| (i, create_test_image(100, 100)))
             .collect();
-        
+
         let results = ImageFingerprinter::fingerprint_batch_with(&images, HashAlgorithm::AHash);
-        
+
         assert_eq!(results.len(), 3);
         for result in &results {
             assert!(result.1.is_ok());
@@ -702,11 +708,11 @@ mod tests {
     fn test_fingerprinter_batch_chunked_empty() {
         let images: Vec<(usize, Vec<u8>)> = vec![];
         let mut results = Vec::new();
-        
+
         ImageFingerprinter::fingerprint_batch_chunked(&images, 2, |id, result| {
             results.push((id, result));
         });
-        
+
         assert_eq!(results.len(), 0);
     }
 
@@ -715,11 +721,11 @@ mod tests {
         let img = create_test_image(100, 100);
         let images = vec![(0, img)];
         let mut results = Vec::new();
-        
+
         ImageFingerprinter::fingerprint_batch_chunked(&images, 2, |id, result| {
             results.push((id, result));
         });
-        
+
         assert_eq!(results.len(), 1);
         assert!(results[0].1.is_ok());
     }
@@ -730,11 +736,11 @@ mod tests {
             .map(|i| (i, create_test_image(100, 100)))
             .collect();
         let mut results = Vec::new();
-        
+
         ImageFingerprinter::fingerprint_batch_chunked(&images, 3, |id, result| {
             results.push((id, result));
         });
-        
+
         assert_eq!(results.len(), 10);
         for (i, result) in results.iter().enumerate() {
             assert_eq!(result.0, i);
@@ -748,11 +754,11 @@ mod tests {
             .map(|i| (i, create_test_image(100, 100)))
             .collect();
         let mut results = Vec::new();
-        
+
         ImageFingerprinter::fingerprint_batch_chunked(&images, 1, |id, result| {
             results.push((id, result));
         });
-        
+
         assert_eq!(results.len(), 5);
     }
 
@@ -762,11 +768,11 @@ mod tests {
             .map(|i| (i, create_test_image(100, 100)))
             .collect();
         let mut results = Vec::new();
-        
+
         ImageFingerprinter::fingerprint_batch_chunked(&images, 0, |id, result| {
             results.push((id, result));
         });
-        
+
         assert_eq!(results.len(), 5);
     }
 
@@ -776,11 +782,11 @@ mod tests {
             .map(|i| (i, create_test_image(100, 100)))
             .collect();
         let mut results = Vec::new();
-        
+
         ImageFingerprinter::fingerprint_batch_chunked(&images, 100, |id, result| {
             results.push((id, result));
         });
-        
+
         assert_eq!(results.len(), 5);
     }
 
@@ -791,11 +797,11 @@ mod tests {
             .map(|i| (i, create_test_image(100, 100)))
             .collect();
         let mut results = Vec::new();
-        
+
         ctx.fingerprint_batch_chunked(&images, 2, |id, result| {
             results.push((id, result));
         });
-        
+
         assert_eq!(results.len(), 5);
         for result in &results {
             assert!(result.1.is_ok());
@@ -810,9 +816,9 @@ mod tests {
             .enumerate()
             .map(|(i, &(w, h))| (i, create_test_image(w, h)))
             .collect();
-        
+
         let results = ImageFingerprinter::fingerprint_batch(&images);
-        
+
         assert_eq!(results.len(), 5);
         for result in &results {
             assert!(result.1.is_ok());
@@ -825,9 +831,9 @@ mod tests {
             .map(|i| (i, create_test_image(100, 100)))
             .collect();
         images.push((3, vec![]));
-        
+
         let results = ImageFingerprinter::fingerprint_batch(&images);
-        
+
         assert_eq!(results.len(), 4);
         assert!(results[0].1.is_ok());
         assert!(results[1].1.is_ok());
@@ -838,10 +844,10 @@ mod tests {
     #[test]
     fn test_fingerprinter_static_methods() {
         let img = create_test_image(100, 100);
-        
+
         let fp1 = ImageFingerprinter::fingerprint(&img).unwrap();
         let fp2 = ImageFingerprinter::fingerprint(&img).unwrap();
-        
+
         assert_eq!(fp1.exact_hash(), fp2.exact_hash());
     }
 
@@ -849,10 +855,10 @@ mod tests {
     fn test_fingerprinter_compare_static() {
         let img1 = create_test_image(100, 100);
         let img2 = create_test_image(100, 100);
-        
+
         let fp1 = ImageFingerprinter::fingerprint_with(&img1, HashAlgorithm::PHash).unwrap();
         let fp2 = ImageFingerprinter::fingerprint_with(&img2, HashAlgorithm::PHash).unwrap();
-        
+
         let sim = ImageFingerprinter::compare(&fp1, &fp2);
         assert!(sim.score >= 0.0 && sim.score <= 1.0);
     }

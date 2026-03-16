@@ -104,7 +104,7 @@ pub fn compute_similarity(a: &ImageFingerprint, b: &ImageFingerprint) -> Similar
     let global_distance = hamming_distance(a.global_hash, b.global_hash);
     let global_similarity = hash_similarity(global_distance);
     let block_similarity = compute_block_similarity(&a.block_hashes, &b.block_hashes);
-    
+
     // Weighted combination: 40% global + 60% block-level
     // This weighting emphasizes crop resistance while maintaining overall similarity
     let combined_score = 0.4 * global_similarity + 0.6 * block_similarity;
@@ -234,14 +234,18 @@ mod tests {
     fn test_compute_block_similarity_partial_match() {
         let mut blocks_a = [0u64; 16];
         let mut blocks_b = [0u64; 16];
-        
+
         for i in 0..8 {
             blocks_a[i] = 0x1234567890ABCDEF;
             blocks_b[i] = 0x1234567890ABCDEF;
         }
-        
+
         let sim = compute_block_similarity(&blocks_a, &blocks_b);
-        assert!((sim - 1.0).abs() < 1e-5, "Expected 1.0 for half matching blocks (others are identical 0s), got {}", sim);
+        assert!(
+            (sim - 1.0).abs() < 1e-5,
+            "Expected 1.0 for half matching blocks (others are identical 0s), got {}",
+            sim
+        );
     }
 
     #[test]
@@ -338,20 +342,20 @@ mod tests {
     fn test_weighted_combination_formula() {
         let global_hash1 = 0x0000000000000000;
         let global_hash2 = 0x0000000000000000;
-        
+
         let mut blocks1 = [0u64; 16];
         let mut blocks2 = [0u64; 16];
-        
+
         for i in 0..16 {
             blocks1[i] = 0xAAAAAAAAAAAAAAAA;
             blocks2[i] = 0xAAAAAAAAAAAAAAAA;
         }
-        
+
         let fp1 = ImageFingerprint::new([1u8; 32], global_hash1, blocks1);
         let fp2 = ImageFingerprint::new([2u8; 32], global_hash2, blocks2);
-        
+
         let sim = compute_similarity(&fp1, &fp2);
-        
+
         assert!(!sim.exact_match);
         assert_eq!(sim.perceptual_distance, 0);
         assert!((sim.score - 1.0).abs() < 1e-5);

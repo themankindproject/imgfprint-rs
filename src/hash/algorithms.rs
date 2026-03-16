@@ -83,7 +83,7 @@ mod tests {
         let ahash = HashAlgorithm::AHash;
         let phash = HashAlgorithm::PHash;
         let dhash = HashAlgorithm::DHash;
-        
+
         assert_eq!(ahash.clone(), HashAlgorithm::AHash);
         assert_eq!(phash.clone(), HashAlgorithm::PHash);
         assert_eq!(dhash.clone(), HashAlgorithm::DHash);
@@ -94,11 +94,11 @@ mod tests {
         let ahash = HashAlgorithm::AHash;
         let phash = HashAlgorithm::PHash;
         let dhash = HashAlgorithm::DHash;
-        
+
         let ahash_copy = ahash;
         let phash_copy = phash;
         let dhash_copy = dhash;
-        
+
         assert_eq!(ahash, ahash_copy);
         assert_eq!(phash, phash_copy);
         assert_eq!(dhash, dhash_copy);
@@ -109,7 +109,7 @@ mod tests {
         assert_eq!(HashAlgorithm::AHash, HashAlgorithm::AHash);
         assert_eq!(HashAlgorithm::PHash, HashAlgorithm::PHash);
         assert_eq!(HashAlgorithm::DHash, HashAlgorithm::DHash);
-        
+
         assert_ne!(HashAlgorithm::AHash, HashAlgorithm::PHash);
         assert_ne!(HashAlgorithm::AHash, HashAlgorithm::DHash);
         assert_ne!(HashAlgorithm::PHash, HashAlgorithm::DHash);
@@ -126,24 +126,24 @@ mod tests {
     fn test_hash_algorithm_hash() {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        
+
         let mut hasher1 = DefaultHasher::new();
         let mut hasher2 = DefaultHasher::new();
-        
+
         HashAlgorithm::AHash.hash(&mut hasher1);
         HashAlgorithm::AHash.hash(&mut hasher2);
-        
+
         assert_eq!(hasher1.finish(), hasher2.finish());
     }
 
     #[test]
     fn test_hash_algorithm_in_vec() {
-        let algorithms = vec![
+        let algorithms = [
             HashAlgorithm::AHash,
             HashAlgorithm::PHash,
             HashAlgorithm::DHash,
         ];
-        
+
         assert_eq!(algorithms.len(), 3);
         assert_eq!(algorithms[0], HashAlgorithm::AHash);
         assert_eq!(algorithms[1], HashAlgorithm::PHash);
@@ -152,7 +152,11 @@ mod tests {
 
     #[test]
     fn test_hash_algorithm_match_expression() {
-        for algo in [HashAlgorithm::AHash, HashAlgorithm::PHash, HashAlgorithm::DHash] {
+        for algo in [
+            HashAlgorithm::AHash,
+            HashAlgorithm::PHash,
+            HashAlgorithm::DHash,
+        ] {
             match algo {
                 HashAlgorithm::AHash => assert_eq!(algo.hash_bits(), 64),
                 HashAlgorithm::PHash => assert_eq!(algo.hash_bits(), 64),

@@ -301,16 +301,20 @@ mod tests {
     fn test_phash_similar_images_similar_hashes() {
         let mut img1 = [0.5f32; 32 * 32];
         let mut img2 = [0.5f32; 32 * 32];
-        
+
         for i in 0..img1.len() {
             img1[i] = (i % 128) as f32 / 255.0;
             img2[i] = (i % 128 + 2) as f32 / 255.0;
         }
-        
+
         let h1 = compute_phash(&img1);
         let h2 = compute_phash(&img2);
         let distance = (h1 ^ h2).count_ones();
-        assert!(distance < 32, "Similar images should have low Hamming distance, got {}", distance);
+        assert!(
+            distance < 32,
+            "Similar images should have low Hamming distance, got {}",
+            distance
+        );
     }
 
     #[test]
@@ -318,10 +322,10 @@ mod tests {
         let input: [f32; 32] = std::array::from_fn(|i| (i % 256) as f32 / 255.0);
         let mut output = [0.0f32; 32];
         dct2_32(&input, &mut output);
-        
+
         let mut output2 = [0.0f32; 32];
         dct2_32(&input, &mut output2);
-        
+
         assert_eq!(output, output2);
     }
 
@@ -335,8 +339,8 @@ mod tests {
     #[test]
     fn test_compute_hash_from_coeffs_ascending() {
         let mut coeffs = [0.0f32; TOTAL_HASH_ELEMENTS];
-        for i in 0..TOTAL_HASH_ELEMENTS {
-            coeffs[i] = i as f32;
+        for (i, item) in coeffs.iter_mut().enumerate().take(TOTAL_HASH_ELEMENTS) {
+            *item = i as f32;
         }
         let hash = compute_hash_from_coeffs(&coeffs);
         assert_ne!(hash, 0);

@@ -29,7 +29,7 @@ pub fn compute_dhash(pixels: &[f32; 32 * 32]) -> u64 {
 #[inline]
 pub fn compute_dhash_from_64x64(block: &[f32; 64 * 64]) -> u64 {
     let mut downsampled = [0.0f32; 32 * 32];
-    
+
     // First downsample 64x64 to 32x32 using bilinear resampling
     bilinear_resample(block, 64, 64, &mut downsampled, 32, 32);
 
@@ -170,17 +170,21 @@ mod tests {
     fn test_dhash_bit_ordering() {
         let mut img1 = [0.0f32; 32 * 32];
         let mut img2 = [0.0f32; 32 * 32];
-        
+
         for i in 0..img1.len() {
             img1[i] = (i % 128) as f32 / 255.0;
             img2[i] = (i % 128 + 1) as f32 / 255.0;
         }
-        
+
         let h1 = compute_dhash(&img1);
         let h2 = compute_dhash(&img2);
-        
+
         let distance = (h1 ^ h2).count_ones();
-        assert!(distance < 32, "Similar images should have low Hamming distance, got {}", distance);
+        assert!(
+            distance < 32,
+            "Similar images should have low Hamming distance, got {}",
+            distance
+        );
     }
 
     #[test]
@@ -208,8 +212,8 @@ mod tests {
     #[test]
     fn test_compute_hash_from_gradient_ascending() {
         let mut pixels = [0.0f32; DHASH_SIZE];
-        for i in 0..DHASH_SIZE {
-            pixels[i] = i as f32 / DHASH_SIZE as f32;
+        for (i, item) in pixels.iter_mut().enumerate().take(DHASH_SIZE) {
+            *item = i as f32 / DHASH_SIZE as f32;
         }
         let hash = compute_hash_from_gradient(&pixels);
         assert_eq!(hash, 0);
@@ -218,8 +222,8 @@ mod tests {
     #[test]
     fn test_compute_hash_from_gradient_descending() {
         let mut pixels = [1.0f32; DHASH_SIZE];
-        for i in 0..DHASH_SIZE {
-            pixels[i] = 1.0 - (i as f32 / DHASH_SIZE as f32);
+        for (i, item) in pixels.iter_mut().enumerate().take(DHASH_SIZE) {
+            *item = 1.0 - (i as f32 / DHASH_SIZE as f32);
         }
         let hash = compute_hash_from_gradient(&pixels);
         assert_ne!(hash, 0);

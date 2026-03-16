@@ -27,7 +27,7 @@ pub fn compute_ahash(pixels: &[f32; 32 * 32]) -> u64 {
 #[inline]
 pub fn compute_ahash_from_64x64(block: &[f32; 64 * 64]) -> u64 {
     let mut downsampled = [0.0f32; 32 * 32];
-    
+
     // First downsample 64x64 to 32x32 using bilinear resampling
     bilinear_resample(block, 64, 64, &mut downsampled, 32, 32);
 
@@ -204,11 +204,11 @@ mod tests {
     #[test]
     fn test_compute_hash_from_mean_half_half() {
         let mut pixels = [0.0f32; TOTAL_PIXELS];
-        for i in 0..TOTAL_PIXELS / 2 {
-            pixels[i] = 0.0;
+        for item in pixels.iter_mut().take(TOTAL_PIXELS / 2) {
+            *item = 0.0;
         }
-        for i in TOTAL_PIXELS / 2..TOTAL_PIXELS {
-            pixels[i] = 1.0;
+        for item in pixels.iter_mut().skip(TOTAL_PIXELS / 2) {
+            *item = 1.0;
         }
         let hash = compute_hash_from_mean(&pixels);
         assert_ne!(hash, 0);
@@ -218,8 +218,8 @@ mod tests {
     #[test]
     fn test_compute_hash_from_mean_bit_ordering() {
         let mut pixels = [0.0f32; TOTAL_PIXELS];
-        for i in 0..TOTAL_PIXELS {
-            pixels[i] = i as f32 / TOTAL_PIXELS as f32;
+        for (i, item) in pixels.iter_mut().enumerate().take(TOTAL_PIXELS) {
+            *item = i as f32 / TOTAL_PIXELS as f32;
         }
         let hash = compute_hash_from_mean(&pixels);
         assert_ne!(hash, 0);
@@ -229,15 +229,19 @@ mod tests {
     fn test_ahash_similar_images() {
         let mut img1 = [0.5f32; 32 * 32];
         let mut img2 = [0.5f32; 32 * 32];
-        
+
         for i in 0..img1.len() {
             img1[i] = (i % 128) as f32 / 255.0;
             img2[i] = (i % 128 + 2) as f32 / 255.0;
         }
-        
+
         let h1 = compute_ahash(&img1);
         let h2 = compute_ahash(&img2);
         let distance = (h1 ^ h2).count_ones();
-        assert!(distance < 32, "Similar images should have low Hamming distance, got {}", distance);
+        assert!(
+            distance < 32,
+            "Similar images should have low Hamming distance, got {}",
+            distance
+        );
     }
 }

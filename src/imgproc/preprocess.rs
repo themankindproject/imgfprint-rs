@@ -185,7 +185,7 @@ impl Preprocessor {
         // Convert to grayscale BEFORE reclaiming the buffer
         // This avoids the bug where we reclaim dst_buffer before using it
         let rgb_bytes = dst.into_vec();
-        
+
         // Reuse grayscale buffer
         #[allow(clippy::uninit_vec)]
         unsafe {
@@ -228,39 +228,43 @@ impl Preprocessor {
 #[inline(always)]
 fn rgb_to_grayscale_simd(rgb: &[u8], gray: &mut [u8]) {
     debug_assert_eq!(gray.len(), rgb.len() / 3);
-    
+
     // Process 4 pixels at a time for better instruction-level parallelism
     let len = rgb.len();
     let chunks = len / 12; // 12 bytes = 4 pixels
     let remainder = len % 12;
-    
+
     for i in 0..chunks {
         let base = i * 12;
         let gray_base = i * 4;
-        
+
         // Process 4 pixels with independent operations (ILP-friendly)
         let r0 = rgb[base] as u32;
         let g0 = rgb[base + 1] as u32;
         let b0 = rgb[base + 2] as u32;
-        
+
         let r1 = rgb[base + 3] as u32;
         let g1 = rgb[base + 4] as u32;
         let b1 = rgb[base + 5] as u32;
-        
+
         let r2 = rgb[base + 6] as u32;
         let g2 = rgb[base + 7] as u32;
         let b2 = rgb[base + 8] as u32;
-        
+
         let r3 = rgb[base + 9] as u32;
         let g3 = rgb[base + 10] as u32;
         let b3 = rgb[base + 11] as u32;
-        
-        gray[gray_base] = ((LUMA_COEFF_R * r0 + LUMA_COEFF_G * g0 + LUMA_COEFF_B * b0) >> LUMA_SHIFT) as u8;
-        gray[gray_base + 1] = ((LUMA_COEFF_R * r1 + LUMA_COEFF_G * g1 + LUMA_COEFF_B * b1) >> LUMA_SHIFT) as u8;
-        gray[gray_base + 2] = ((LUMA_COEFF_R * r2 + LUMA_COEFF_G * g2 + LUMA_COEFF_B * b2) >> LUMA_SHIFT) as u8;
-        gray[gray_base + 3] = ((LUMA_COEFF_R * r3 + LUMA_COEFF_G * g3 + LUMA_COEFF_B * b3) >> LUMA_SHIFT) as u8;
+
+        gray[gray_base] =
+            ((LUMA_COEFF_R * r0 + LUMA_COEFF_G * g0 + LUMA_COEFF_B * b0) >> LUMA_SHIFT) as u8;
+        gray[gray_base + 1] =
+            ((LUMA_COEFF_R * r1 + LUMA_COEFF_G * g1 + LUMA_COEFF_B * b1) >> LUMA_SHIFT) as u8;
+        gray[gray_base + 2] =
+            ((LUMA_COEFF_R * r2 + LUMA_COEFF_G * g2 + LUMA_COEFF_B * b2) >> LUMA_SHIFT) as u8;
+        gray[gray_base + 3] =
+            ((LUMA_COEFF_R * r3 + LUMA_COEFF_G * g3 + LUMA_COEFF_B * b3) >> LUMA_SHIFT) as u8;
     }
-    
+
     // Handle remaining pixels
     let remainder_start = chunks * 12;
     for i in 0..remainder / 3 {
@@ -268,7 +272,8 @@ fn rgb_to_grayscale_simd(rgb: &[u8], gray: &mut [u8]) {
         let r = rgb[base] as u32;
         let g = rgb[base + 1] as u32;
         let b = rgb[base + 2] as u32;
-        gray[chunks * 4 + i] = ((LUMA_COEFF_R * r + LUMA_COEFF_G * g + LUMA_COEFF_B * b) >> LUMA_SHIFT) as u8;
+        gray[chunks * 4 + i] =
+            ((LUMA_COEFF_R * r + LUMA_COEFF_G * g + LUMA_COEFF_B * b) >> LUMA_SHIFT) as u8;
     }
 }
 
@@ -299,7 +304,7 @@ pub fn extract_global_region(image: &GrayImage) -> [f32; (PHASH_SIZE * PHASH_SIZ
     for y in 0..PHASH_SIZE as usize {
         let src_row_start = (start_y as usize + y) * NORMALIZED_SIZE as usize + start_x as usize;
         let dst_row_start = y * PHASH_SIZE as usize;
-        
+
         // Unroll inner loop for better performance
         for x in 0..PHASH_SIZE as usize {
             buffer[dst_row_start + x] = pixels[src_row_start + x] as f32 * SCALE;
@@ -354,7 +359,7 @@ mod tests {
         let src: [f32; 4] = [0.0, 0.5, 0.5, 1.0];
         let mut dst = [0.0f32; 4];
         bilinear_resample(&src, 2, 2, &mut dst, 2, 2);
-        
+
         assert!((dst[0] - 0.0).abs() < 1e-6);
         assert!((dst[1] - 0.5).abs() < 1e-6);
         assert!((dst[2] - 0.5).abs() < 1e-6);
@@ -364,16 +369,13 @@ mod tests {
     #[test]
     fn test_bilinear_resample_downsample() {
         let src: [f32; 16] = [
-            0.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 1.0, 0.0,
-            0.0, 1.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         ];
         let mut dst = [0.0f32; 4];
         bilinear_resample(&src, 4, 4, &mut dst, 2, 2);
-        
+
         for &v in &dst {
-            assert!(v >= 0.0 && v <= 1.0);
+            assert!((0.0..=1.0).contains(&v));
         }
     }
 
@@ -382,7 +384,7 @@ mod tests {
         let src: [f32; 64] = [0.5; 64];
         let mut dst = [0.0f32; 16];
         bilinear_resample(&src, 8, 8, &mut dst, 4, 4);
-        
+
         for &v in &dst {
             assert!((v - 0.5).abs() < 1e-5);
         }
@@ -396,10 +398,10 @@ mod tests {
                 src[y * 32 + x] = x as f32 / 31.0;
             }
         }
-        
+
         let mut dst = [0.0f32; 16 * 16];
         bilinear_resample(&src, 32, 32, &mut dst, 16, 16);
-        
+
         assert!((dst[0] - 0.0).abs() < 0.1);
         assert!((dst[15] - 1.0).abs() < 0.1);
     }
@@ -409,7 +411,7 @@ mod tests {
         let src: [f32; 16] = [0.0; 16];
         let mut dst = [0.0f32; 4];
         bilinear_resample(&src, 4, 4, &mut dst, 2, 2);
-        
+
         for &v in &dst {
             assert_eq!(v, 0.0);
         }
@@ -420,7 +422,7 @@ mod tests {
         let rgb = vec![128u8; 36];
         let mut gray = vec![0u8; 12];
         rgb_to_grayscale_simd(&rgb, &mut gray);
-        
+
         for &g in &gray {
             assert!(g > 0 && g < 255);
         }
@@ -434,7 +436,7 @@ mod tests {
         }
         let mut gray = vec![0u8; 12];
         rgb_to_grayscale_simd(&rgb, &mut gray);
-        
+
         for &g in &gray {
             assert!(g > 0 && g < 255);
         }
@@ -445,7 +447,7 @@ mod tests {
         let rgb = vec![100u8; 39];
         let mut gray = vec![0u8; 13];
         rgb_to_grayscale_simd(&rgb, &mut gray);
-        
+
         assert_eq!(gray.len(), 13);
         for &g in &gray {
             assert!(g > 0);
@@ -457,7 +459,7 @@ mod tests {
         let rgb = vec![0u8; 12];
         let mut gray = vec![0u8; 4];
         rgb_to_grayscale_simd(&rgb, &mut gray);
-        
+
         for &g in &gray {
             assert_eq!(g, 0);
         }
@@ -468,7 +470,7 @@ mod tests {
         let rgb = vec![255u8; 12];
         let mut gray = vec![0u8; 4];
         rgb_to_grayscale_simd(&rgb, &mut gray);
-        
+
         for &g in &gray {
             assert_eq!(g, 255);
         }
@@ -478,7 +480,7 @@ mod tests {
     fn test_extract_global_region_uniform() {
         let img = GrayImage::from_pixel(256, 256, Luma([128u8]));
         let region = extract_global_region(&img);
-        
+
         assert_eq!(region.len(), 32 * 32);
         for &v in &region {
             assert!((v - 0.5).abs() < 0.01);
@@ -494,7 +496,7 @@ mod tests {
             }
         }
         let region = extract_global_region(&img);
-        
+
         assert_eq!(region.len(), 32 * 32);
         assert!(region[0] < region[region.len() - 1]);
     }
@@ -503,7 +505,7 @@ mod tests {
     fn test_extract_blocks_uniform() {
         let img = GrayImage::from_pixel(256, 256, Luma([128u8]));
         let blocks = extract_blocks(&img);
-        
+
         assert_eq!(blocks.len(), 16);
         for block in &blocks {
             assert_eq!(block.len(), 64 * 64);
@@ -517,9 +519,9 @@ mod tests {
     fn test_extract_blocks_positions() {
         let img = GrayImage::from_pixel(256, 256, Luma([128u8]));
         let blocks = extract_blocks(&img);
-        
+
         assert_eq!(blocks.len(), 16);
-        
+
         for (i, block) in blocks.iter().enumerate() {
             assert_eq!(block.len(), 64 * 64);
             let block_x = i % 4;
@@ -537,9 +539,9 @@ mod tests {
                 img.put_pixel(x, y, Luma([value]));
             }
         }
-        
+
         let blocks = extract_blocks(&img);
-        
+
         assert!((blocks[0].iter().sum::<f32>() / (64.0 * 64.0)) > 0.4);
         assert!((blocks[15].iter().sum::<f32>() / (64.0 * 64.0)) < 0.1);
     }
@@ -564,10 +566,10 @@ mod tests {
         let mut preprocessor = Preprocessor::new();
         let img = GrayImage::from_pixel(256, 256, Luma([128u8]));
         let dynamic = DynamicImage::ImageLuma8(img);
-        
+
         let result = preprocessor.normalize(&dynamic);
         assert!(result.is_ok());
-        
+
         let gray = result.unwrap();
         assert_eq!(gray.width(), 256);
         assert_eq!(gray.height(), 256);
@@ -578,10 +580,10 @@ mod tests {
         let mut preprocessor = Preprocessor::new();
         let img = GrayImage::from_pixel(64, 64, Luma([128u8]));
         let dynamic = DynamicImage::ImageLuma8(img);
-        
+
         let result = preprocessor.normalize(&dynamic);
         assert!(result.is_ok());
-        
+
         let gray = result.unwrap();
         assert_eq!(gray.width(), 256);
         assert_eq!(gray.height(), 256);
@@ -592,13 +594,13 @@ mod tests {
         let mut preprocessor = Preprocessor::new();
         let img1 = GrayImage::from_pixel(100, 100, Luma([50u8]));
         let img2 = GrayImage::from_pixel(200, 200, Luma([200u8]));
-        
+
         let dynamic1 = DynamicImage::ImageLuma8(img1);
         let dynamic2 = DynamicImage::ImageLuma8(img2);
-        
+
         let result1 = preprocessor.normalize(&dynamic1);
         let result2 = preprocessor.normalize(&dynamic2);
-        
+
         assert!(result1.is_ok());
         assert!(result2.is_ok());
     }

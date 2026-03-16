@@ -75,7 +75,7 @@ pub fn decode_image(image_bytes: &[u8]) -> Result<DynamicImage, ImgFprintError> 
         // Preserve error details for all other cases
         other => ImgFprintError::ProcessingError(format!("image processing error: {}", other)),
     })?;
-    
+
     Ok(image)
 }
 
@@ -85,8 +85,9 @@ mod tests {
     use image::{ImageBuffer, Rgb};
 
     fn create_png_image(width: u32, height: u32) -> Vec<u8> {
-        let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
-            ImageBuffer::from_fn(width, height, |x, y| Rgb([(x % 256) as u8, (y % 256) as u8, 128]));
+        let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(width, height, |x, y| {
+            Rgb([(x % 256) as u8, (y % 256) as u8, 128])
+        });
         let mut buf = Vec::new();
         img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
             .unwrap();
@@ -94,11 +95,15 @@ mod tests {
     }
 
     fn create_jpeg_image(width: u32, height: u32) -> Vec<u8> {
-        let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
-            ImageBuffer::from_fn(width, height, |x, y| Rgb([(x % 256) as u8, (y % 256) as u8, 128]));
+        let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(width, height, |x, y| {
+            Rgb([(x % 256) as u8, (y % 256) as u8, 128])
+        });
         let mut buf = Vec::new();
-        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Jpeg)
-            .unwrap();
+        img.write_to(
+            &mut std::io::Cursor::new(&mut buf),
+            image::ImageFormat::Jpeg,
+        )
+        .unwrap();
         buf
     }
 
@@ -144,8 +149,9 @@ mod tests {
 
     #[test]
     fn test_decode_valid_gif() {
-        let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
-            ImageBuffer::from_fn(100, 100, |x, y| Rgb([(x % 256) as u8, (y % 256) as u8, 128]));
+        let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(100, 100, |x, y| {
+            Rgb([(x % 256) as u8, (y % 256) as u8, 128])
+        });
         let mut buf = Vec::new();
         img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Gif)
             .unwrap();
@@ -155,19 +161,24 @@ mod tests {
 
     #[test]
     fn test_decode_valid_webp() {
-        let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
-            ImageBuffer::from_fn(100, 100, |x, y| Rgb([(x % 256) as u8, (y % 256) as u8, 128]));
+        let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(100, 100, |x, y| {
+            Rgb([(x % 256) as u8, (y % 256) as u8, 128])
+        });
         let mut buf = Vec::new();
-        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::WebP)
-            .unwrap();
+        img.write_to(
+            &mut std::io::Cursor::new(&mut buf),
+            image::ImageFormat::WebP,
+        )
+        .unwrap();
         let result = decode_image(&buf);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_decode_valid_bmp() {
-        let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
-            ImageBuffer::from_fn(100, 100, |x, y| Rgb([(x % 256) as u8, (y % 256) as u8, 128]));
+        let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(100, 100, |x, y| {
+            Rgb([(x % 256) as u8, (y % 256) as u8, 128])
+        });
         let mut buf = Vec::new();
         img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Bmp)
             .unwrap();
@@ -260,8 +271,9 @@ mod tests {
 
     #[test]
     fn test_decode_rgba_image() {
-        let img: ImageBuffer<image::Rgba<u8>, Vec<u8>> =
-            ImageBuffer::from_fn(100, 100, |x, y| image::Rgba([(x % 256) as u8, (y % 256) as u8, 128, 255]));
+        let img: ImageBuffer<image::Rgba<u8>, Vec<u8>> = ImageBuffer::from_fn(100, 100, |x, y| {
+            image::Rgba([(x % 256) as u8, (y % 256) as u8, 128, 255])
+        });
         let mut buf = Vec::new();
         img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
             .unwrap();
