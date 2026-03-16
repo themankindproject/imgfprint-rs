@@ -23,6 +23,7 @@ fn main() {
                     ImgFprintError::EmbeddingDimensionMismatch { .. } => {
                         "EmbeddingDimensionMismatch"
                     }
+                    _ => "Unknown",
                 };
                 println!("{}: {} - {}", name, error_type, e);
             }
