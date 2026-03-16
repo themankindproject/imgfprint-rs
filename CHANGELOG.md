@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - Unreleased
+
+### Added
+
+- **New examples**:
+  - `single_algorithm.rs` - Demonstrates using specific hash algorithms
+  - `error_handling.rs` - Shows error type pattern matching
+
+- **CONTRIBUTING.md**: Added semver policy documentation
+  - Versioning scheme (MAJOR.MINOR.PATCH)
+  - Breaking change definitions
+  - Deprecation policy (one minor version before removal)
+  - MSRV policy
+
+### Changed
+
+- **Improved API consistency**:
+  - Removed misleading `Default` derive from `HashAlgorithm`
+  - Added `Debug` derive to `FingerprinterContext` and `Preprocessor`
+  - Added module-level documentation to `core`, `hash`, and `imgproc` modules
+
+- **Improved error handling**:
+  - Standardized error constructors in `decode.rs`
+  - Added `image_too_small()` helper constructor
+
+- **Improved embedding safety**:
+  - Added NaN/infinity re-validation in `semantic_similarity()`
+  - Added performance note to `Embedding::vector()` for O(n) clone warning
+
 ## [0.3.0] - 2025-03-15
 
 ### Added
@@ -105,6 +134,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Semantic embeddings via external providers
 - Local ONNX inference (optional feature)
 
+[0.3.1]: https://github.com/themankindproject/imgfprint-rs/compare/v0.3.0...main
 [0.3.0]: https://github.com/themankindproject/imgfprint-rs/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/themankindproject/imgfprint-rs/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/themankindproject/imgfprint-rs/releases/tag/v0.1.3
