@@ -10,6 +10,9 @@ use crate::imgproc::preprocess::{extract_blocks, extract_global_region, Preproce
 use blake3::Hasher;
 use std::cell::RefCell;
 
+#[cfg(feature = "tracing")]
+use tracing::{debug, instrument};
+
 /// Context for high-performance fingerprinting with buffer reuse.
 ///
 /// Maintains a reusable preprocessor, hasher, and internal buffers
@@ -39,22 +42,40 @@ impl FingerprinterContext {
     ///
     /// Calculates both PHash and DHash simultaneously for improved accuracy.
     /// Returns a MultiHashFingerprint containing all hash layers.
+    #[cfg_attr(feature = "tracing", instrument(skip(self, image_bytes), fields(size = image_bytes.len())))]
     pub fn fingerprint(
         &mut self,
         image_bytes: &[u8],
     ) -> Result<MultiHashFingerprint, ImgFprintError> {
-        self.compute_all_hashes(image_bytes)
+        #[cfg(feature = "tracing")]
+        let start = std::time::Instant::now();
+        let result = self.compute_all_hashes(image_bytes);
+        #[cfg(feature = "tracing")]
+        debug!(
+            duration_ms = start.elapsed().as_millis(),
+            "fingerprint completed"
+        );
+        result
     }
 
     /// Computes a single perceptual hash using the specified algorithm.
     ///
     /// More efficient than computing all hashes when only one algorithm is needed.
+    #[cfg_attr(feature = "tracing", instrument(skip(self, image_bytes), fields(size = image_bytes.len(), algorithm = ?algorithm)))]
     pub fn fingerprint_with(
         &mut self,
         image_bytes: &[u8],
         algorithm: HashAlgorithm,
     ) -> Result<ImageFingerprint, ImgFprintError> {
-        self.compute_single_hash(image_bytes, algorithm)
+        #[cfg(feature = "tracing")]
+        let start = std::time::Instant::now();
+        let result = self.compute_single_hash(image_bytes, algorithm);
+        #[cfg(feature = "tracing")]
+        debug!(
+            duration_ms = start.elapsed().as_millis(),
+            "fingerprint_with completed"
+        );
+        result
     }
 
     fn compute_all_hashes(
@@ -225,6 +246,7 @@ impl FingerprinterContext {
     /// Processes images in chunks of `chunk_size` and invokes the callback
     /// for each result. This prevents unbounded memory consumption when
     /// processing large batches.
+    #[cfg_attr(feature = "tracing", instrument(skip(self, images, callback), fields(chunk_size, image_count = images.len())))]
     pub fn fingerprint_batch_chunked<S, F>(
         &mut self,
         images: &[(S, Vec<u8>)],
@@ -235,12 +257,41 @@ impl FingerprinterContext {
         F: FnMut(S, Result<MultiHashFingerprint, ImgFprintError>),
     {
         let chunk_size = chunk_size.max(1);
+
+        #[cfg(feature = "tracing")]
+        tracing::debug!(
+            chunk_size,
+            image_count = images.len(),
+            "starting chunked batch processing"
+        );
+
+        #[cfg(feature = "tracing")]
+        let start = std::time::Instant::now();
+
+        #[cfg(feature = "tracing")]
+        let mut processed = 0usize;
+        #[cfg(feature = "tracing")]
+        let mut failed = 0usize;
+
         for chunk in images.chunks(chunk_size) {
             for (id, bytes) in chunk {
                 let result = self.fingerprint(bytes);
+                #[cfg(feature = "tracing")]
+                {
+                    if result.is_err() {
+                        failed += 1;
+                    }
+                    processed += 1;
+                }
                 callback(id.clone(), result);
             }
         }
+
+        #[cfg(feature = "tracing")]
+        debug!(
+            duration_ms = start.elapsed().as_millis(),
+            processed, failed, "batch processing completed"
+        );
     }
 }
 
@@ -261,12 +312,24 @@ impl ImageFingerprinter {
     /// # Errors
     ///
     /// Returns `ImgFprintError` if any algorithm fails.
+    #[cfg_attr(feature = "tracing", instrument(skip(image_bytes), fields(size = image_bytes.len())))]
     pub fn fingerprint(image_bytes: &[u8]) -> Result<MultiHashFingerprint, ImgFprintError> {
+        #[cfg(feature = "tracing")]
+        let start = std::time::Instant::now();
+
         thread_local! {
             static CTX: RefCell<FingerprinterContext> = RefCell::new(FingerprinterContext::new());
         }
 
-        CTX.with(|ctx| ctx.borrow_mut().fingerprint(image_bytes))
+        let result = CTX.with(|ctx| ctx.borrow_mut().fingerprint(image_bytes));
+
+        #[cfg(feature = "tracing")]
+        debug!(
+            duration_ms = start.elapsed().as_millis(),
+            "ImageFingerprinter::fingerprint completed"
+        );
+
+        result
     }
 
     /// Computes a single perceptual hash using the specified algorithm.
@@ -277,15 +340,27 @@ impl ImageFingerprinter {
     /// # Arguments
     /// * `image_bytes` - Raw image data
     /// * `algorithm` - Hash algorithm to use (PHash or DHash)
+    #[cfg_attr(feature = "tracing", instrument(skip(image_bytes), fields(size = image_bytes.len(), algorithm = ?algorithm)))]
     pub fn fingerprint_with(
         image_bytes: &[u8],
         algorithm: HashAlgorithm,
     ) -> Result<ImageFingerprint, ImgFprintError> {
+        #[cfg(feature = "tracing")]
+        let start = std::time::Instant::now();
+
         thread_local! {
             static CTX: RefCell<FingerprinterContext> = RefCell::new(FingerprinterContext::new());
         }
 
-        CTX.with(|ctx| ctx.borrow_mut().fingerprint_with(image_bytes, algorithm))
+        let result = CTX.with(|ctx| ctx.borrow_mut().fingerprint_with(image_bytes, algorithm));
+
+        #[cfg(feature = "tracing")]
+        debug!(
+            duration_ms = start.elapsed().as_millis(),
+            "ImageFingerprinter::fingerprint_with completed"
+        );
+
+        result
     }
 
     /// Compares two fingerprints and returns a similarity score.
@@ -316,35 +391,56 @@ impl ImageFingerprinter {
     /// Computes fingerprints for multiple images in batch.
     ///
     /// Processes each image independently and returns results in the same order.
+    #[cfg_attr(feature = "tracing", instrument(skip(images), fields(image_count = images.len())))]
     pub fn fingerprint_batch<S>(
         images: &[(S, Vec<u8>)],
     ) -> Vec<(S, Result<MultiHashFingerprint, ImgFprintError>)>
     where
         S: Send + Sync + Clone + 'static,
     {
+        #[cfg(feature = "tracing")]
+        let start = std::time::Instant::now();
+
         #[cfg(feature = "parallel")]
         {
             use rayon::prelude::*;
 
-            images
+            let results = images
                 .par_iter()
                 .map(|(id, bytes)| {
                     let mut ctx = FingerprinterContext::new();
                     (id.clone(), ctx.fingerprint(bytes))
                 })
-                .collect()
+                .collect();
+
+            #[cfg(feature = "tracing")]
+            debug!(
+                duration_ms = start.elapsed().as_millis(),
+                "parallel batch completed"
+            );
+
+            results
         }
 
         #[cfg(not(feature = "parallel"))]
         {
-            images
+            let results = images
                 .iter()
                 .map(|(id, bytes)| (id.clone(), Self::fingerprint(bytes)))
-                .collect()
+                .collect();
+
+            #[cfg(feature = "tracing")]
+            debug!(
+                duration_ms = start.elapsed().as_millis(),
+                "sequential batch completed"
+            );
+
+            results
         }
     }
 
     /// Computes fingerprints with specific algorithm for multiple images.
+    #[cfg_attr(feature = "tracing", instrument(skip(images), fields(image_count = images.len(), algorithm = ?algorithm)))]
     pub fn fingerprint_batch_with<S>(
         images: &[(S, Vec<u8>)],
         algorithm: HashAlgorithm,
@@ -352,25 +448,44 @@ impl ImageFingerprinter {
     where
         S: Send + Sync + Clone + 'static,
     {
+        #[cfg(feature = "tracing")]
+        let start = std::time::Instant::now();
+
         #[cfg(feature = "parallel")]
         {
             use rayon::prelude::*;
 
-            images
+            let results = images
                 .par_iter()
                 .map(|(id, bytes)| {
                     let mut ctx = FingerprinterContext::new();
                     (id.clone(), ctx.fingerprint_with(bytes, algorithm))
                 })
-                .collect()
+                .collect();
+
+            #[cfg(feature = "tracing")]
+            debug!(
+                duration_ms = start.elapsed().as_millis(),
+                "parallel batch_with completed"
+            );
+
+            results
         }
 
         #[cfg(not(feature = "parallel"))]
         {
-            images
+            let results = images
                 .iter()
                 .map(|(id, bytes)| (id.clone(), Self::fingerprint_with(bytes, algorithm)))
-                .collect()
+                .collect();
+
+            #[cfg(feature = "tracing")]
+            debug!(
+                duration_ms = start.elapsed().as_millis(),
+                "sequential batch_with completed"
+            );
+
+            results
         }
     }
 
@@ -384,6 +499,7 @@ impl ImageFingerprinter {
     /// * `images` - Slice of (id, image_bytes) pairs
     /// * `chunk_size` - Number of images to process per chunk
     /// * `callback` - Function called with each result as (id, Result<...>)
+    #[cfg_attr(feature = "tracing", instrument(skip(images, callback), fields(chunk_size, image_count = images.len())))]
     pub fn fingerprint_batch_chunked<S, F>(
         images: &[(S, Vec<u8>)],
         chunk_size: usize,
@@ -393,11 +509,40 @@ impl ImageFingerprinter {
         F: FnMut(S, Result<MultiHashFingerprint, ImgFprintError>),
     {
         let chunk_size = chunk_size.max(1);
+
+        #[cfg(feature = "tracing")]
+        let start = std::time::Instant::now();
+
+        #[cfg(feature = "tracing")]
+        tracing::debug!(
+            chunk_size,
+            image_count = images.len(),
+            "starting static batch_chunked"
+        );
+
+        #[cfg(feature = "tracing")]
+        let mut processed = 0usize;
+        #[cfg(feature = "tracing")]
+        let mut failed = 0usize;
+
         for chunk in images.chunks(chunk_size) {
             for (id, bytes) in chunk {
                 let result = Self::fingerprint(bytes);
+                #[cfg(feature = "tracing")]
+                {
+                    if result.is_err() {
+                        failed += 1;
+                    }
+                    processed += 1;
+                }
                 callback(id.clone(), result);
             }
         }
+
+        #[cfg(feature = "tracing")]
+        debug!(
+            duration_ms = start.elapsed().as_millis(),
+            processed, failed, "static batch_chunked completed"
+        );
     }
 }

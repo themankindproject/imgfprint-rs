@@ -8,34 +8,82 @@ use thiserror::Error;
 #[non_exhaustive]
 pub enum ImgFprintError {
     /// Image decoding failed (corrupted data or unsupported format).
+    ///
+    /// ## Errors
+    /// This error occurs when:
+    /// - The image data is corrupted or truncated
+    /// - The image format cannot be detected from the magic bytes
+    /// - The underlying image decoder fails (e.g., invalid compression)
     #[error("decode failed: {0}")]
     DecodeError(String),
 
     /// Image data is invalid or dimensions exceed limits (8192x8192 max).
+    ///
+    /// ## Errors
+    /// This error occurs when:
+    /// - Image dimensions exceed 8192x8192 pixels
+    /// - Image dimensions are reported as zero or negative
+    /// - The image header contains invalid values
+    /// - Color type conversion fails
     #[error("invalid image: {0}")]
     InvalidImage(String),
 
     /// Image format is not supported (supported: PNG, JPEG, GIF, WebP, BMP).
+    ///
+    /// ## Errors
+    /// This error occurs when:
+    /// - The file extension or magic bytes don't match a supported format
+    /// - A specific variant of a format is not supported (e.g., JPEG 2000)
+    /// - The image uses an unsupported color space
     #[error("unsupported format: {0}")]
     UnsupportedFormat(String),
 
     /// Internal processing error during fingerprint computation.
+    ///
+    /// ## Errors
+    /// This error occurs when:
+    /// - DCT computation fails
+    /// - Memory allocation fails during processing
+    /// - An invariant in the algorithm is violated
     #[error("processing error: {0}")]
     ProcessingError(String),
 
     /// Image dimensions are too small for fingerprinting.
+    ///
+    /// ## Errors
+    /// This error occurs when:
+    /// - Either dimension is less than 8 pixels
+    /// - The image cannot be resized to the minimum 8x8 required for hashing
     #[error("image dimensions too small: {0}")]
     ImageTooSmall(String),
 
     /// Embedding dimensions do not match between two embeddings.
+    ///
+    /// ## Errors
+    /// This error occurs when:
+    /// - Comparing embeddings from different models with different output dimensions
+    /// - Calling [`semantic_similarity`](crate::embed::semantic_similarity) with mismatched vectors
     #[error("embedding dimension mismatch: expected {expected}, got {actual}")]
     EmbeddingDimensionMismatch { expected: usize, actual: usize },
 
     /// Provider error occurred during embedding generation.
+    ///
+    /// ## Errors
+    /// This error occurs when:
+    /// - ONNX model file cannot be loaded
+    /// - Model inference fails at runtime
+    /// - The model produces an unexpected output shape
     #[error("embedding provider error: {0}")]
     ProviderError(String),
 
     /// Invalid embedding data (empty vector, NaN values, etc.).
+    ///
+    /// ## Errors
+    /// This error occurs when:
+    /// - The embedding vector is empty
+    /// - The vector contains NaN or infinity values
+    /// - Creating an [`Embedding`](crate::embed::Embedding) with invalid data
+    /// - Calling [`semantic_similarity`](crate::embed::semantic_similarity) with invalid embeddings
     #[error("invalid embedding: {0}")]
     InvalidEmbedding(String),
 }

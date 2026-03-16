@@ -46,7 +46,7 @@ Perfect for:
 
 ```toml
 [dependencies]
-imgfprint = "0.3.0"
+imgfprint = "0.3.1"
 ```
 
 ### Feature Flags
@@ -56,17 +56,18 @@ imgfprint = "0.3.0"
 | `serde` | Yes | Serialization support (JSON, binary) |
 | `parallel` | Yes | Parallel batch processing with rayon |
 | `local-embedding` | No | Local ONNX model inference for semantic embeddings |
+| `tracing` | No | Observability hooks for production debugging |
 
 Minimal build (no parallel processing):
 ```toml
 [dependencies]
-imgfprint = { version = "0.3.0", default-features = false }
+imgfprint = { version = "0.3.1", default-features = false }
 ```
 
 With local embeddings (requires ONNX model):
 ```toml
 [dependencies]
-imgfprint = { version = "0.3.0", features = ["local-embedding"] }
+imgfprint = { version = "0.3.1", features = ["local-embedding"] }
 ```
 
 ## Quick Start

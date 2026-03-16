@@ -30,7 +30,7 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-imgfprint = "0.3.0"
+imgfprint = "0.3.1"
 ```
 
 ### Basic Example (Multi-Algorithm)
@@ -780,7 +780,7 @@ With the `local-embedding` feature:
 
 ```toml
 [dependencies]
-imgfprint = { version = "0.3.0", features = ["local-embedding"] }
+imgfprint = { version = "0.3.1", features = ["local-embedding"] }
 ```
 
 ```rust
@@ -939,13 +939,13 @@ Configure the library for your needs:
 ```toml
 [dependencies]
 # Minimal build (no parallel processing)
-imgfprint = { version = "0.3.0", default-features = false }
+imgfprint = { version = "0.3.1", default-features = false }
 
 # Default (serialization + parallel processing)
-imgfprint = "0.3.0"
+imgfprint = "0.3.1"
 
 # With local ONNX inference
-imgfprint = { version = "0.3.0", features = ["local-embedding"] }
+imgfprint = { version = "0.3.1", features = ["local-embedding"] }
 ```
 
 ### Available Features
@@ -955,6 +955,33 @@ imgfprint = { version = "0.3.0", features = ["local-embedding"] }
 | `serde` | Yes | Serialization support (JSON, binary) via serde |
 | `parallel` | Yes | Parallel batch processing using rayon |
 | `local-embedding` | No | Local ONNX model inference for embeddings |
+| `tracing` | No | Observability hooks for production debugging |
+
+### Tracing Feature
+
+Enable the `tracing` feature to add performance instrumentation:
+
+```toml
+[dependencies]
+imgfprint = { version = "0.3.1", features = ["tracing"] }
+```
+
+```rust
+use imgfprint::ImageFingerprinter;
+
+// Initialize a tracing subscriber
+tracing_subscriber::fmt::init();
+
+// Now all fingerprint operations emit trace events
+let fp = ImageFingerprinter::fingerprint(&data).unwrap();
+// Outputs: TRACE fingerprinter: fingerprint completed duration_ms=1.23
+```
+
+**Traced Operations:**
+- `fingerprint()` - tracks image size, duration
+- `fingerprint_with()` - tracks image size, algorithm, duration
+- `fingerprint_batch()` - tracks image count, parallel/sequential, duration
+- `fingerprint_batch_chunked()` - tracks chunk_size, processed count, failed count, duration
 
 ---
 

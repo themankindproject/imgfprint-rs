@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Deprecation policy (one minor version before removal)
   - MSRV policy
 
+- **Observability**: Added optional `tracing` feature for production debugging
+  - `#[instrument]` attributes on all fingerprint methods
+  - Timing spans for performance monitoring
+  - Batch processing metrics (processed/failed counts)
+  - Enable with `cargo build --features tracing`
+
 ### Changed
 
 - **Improved API consistency**:
@@ -29,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Improved error handling**:
   - Standardized error constructors in `decode.rs`
   - Added `image_too_small()` helper constructor
+  - Added detailed `## Errors` sections to each `ImgFprintError` variant with trigger conditions
+
+- **Improved test coverage**:
+  - Added 13 edge case tests covering non-square images, boundary sizes, color spaces, and all supported formats
 
 - **Improved embedding safety**:
   - Added NaN/infinity re-validation in `semantic_similarity()`

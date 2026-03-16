@@ -134,3 +134,156 @@ fn test_is_similar_method() {
 
     assert!(fp1.is_similar(&fp2, 0.8));
 }
+
+#[test]
+fn test_non_square_image_landscape() {
+    let img = image::RgbImage::new(1920, 1080);
+    let bytes = encode_png(&img);
+
+    let fp = ImageFingerprinter::fingerprint(&bytes).expect("fingerprint should succeed");
+    assert!(!fp.exact_hash().iter().all(|&b| b == 0));
+}
+
+#[test]
+fn test_non_square_image_portrait() {
+    let img = image::RgbImage::new(1080, 1920);
+    let bytes = encode_png(&img);
+
+    let fp = ImageFingerprinter::fingerprint(&bytes).expect("fingerprint should succeed");
+    assert!(!fp.exact_hash().iter().all(|&b| b == 0));
+}
+
+#[test]
+fn test_minimum_boundary_32x32() {
+    let img = image::RgbImage::new(32, 32);
+    let bytes = encode_png(&img);
+
+    let fp = ImageFingerprinter::fingerprint(&bytes).expect("fingerprint should succeed");
+    assert!(!fp.exact_hash().iter().all(|&b| b == 0));
+}
+
+#[test]
+fn test_maximum_boundary_8192x8192() {
+    let img = image::RgbImage::new(8192, 8192);
+    let bytes = encode_png(&img);
+
+    let fp = ImageFingerprinter::fingerprint(&bytes).expect("fingerprint should succeed");
+    assert!(!fp.exact_hash().iter().all(|&b| b == 0));
+}
+
+#[test]
+fn test_grayscale_image() {
+    let img = image::GrayImage::new(256, 256);
+    let mut bytes = Vec::new();
+    img.write_to(
+        &mut std::io::Cursor::new(&mut bytes),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
+
+    let fp = ImageFingerprinter::fingerprint(&bytes).expect("fingerprint should succeed");
+    assert!(!fp.exact_hash().iter().all(|&b| b == 0));
+}
+
+#[test]
+fn test_rgba_image() {
+    let img = image::RgbaImage::new(256, 256);
+    let mut bytes = Vec::new();
+    img.write_to(
+        &mut std::io::Cursor::new(&mut bytes),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
+
+    let fp = ImageFingerprinter::fingerprint(&bytes).expect("fingerprint should succeed");
+    assert!(!fp.exact_hash().iter().all(|&b| b == 0));
+}
+
+#[test]
+fn test_rgb_image() {
+    let img = image::RgbImage::new(256, 256);
+    let mut bytes = Vec::new();
+    img.write_to(
+        &mut std::io::Cursor::new(&mut bytes),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
+
+    let fp = ImageFingerprinter::fingerprint(&bytes).expect("fingerprint should succeed");
+    assert!(!fp.exact_hash().iter().all(|&b| b == 0));
+}
+
+#[test]
+fn test_jpeg_format() {
+    let img = image::RgbImage::new(256, 256);
+    let mut bytes = Vec::new();
+    img.write_to(
+        &mut std::io::Cursor::new(&mut bytes),
+        image::ImageFormat::Jpeg,
+    )
+    .unwrap();
+
+    let fp = ImageFingerprinter::fingerprint(&bytes).expect("fingerprint should succeed");
+    assert!(!fp.exact_hash().iter().all(|&b| b == 0));
+}
+
+#[test]
+fn test_gif_format() {
+    let img = image::RgbImage::new(256, 256);
+    let mut bytes = Vec::new();
+    img.write_to(
+        &mut std::io::Cursor::new(&mut bytes),
+        image::ImageFormat::Gif,
+    )
+    .unwrap();
+
+    let fp = ImageFingerprinter::fingerprint(&bytes).expect("fingerprint should succeed");
+    assert!(!fp.exact_hash().iter().all(|&b| b == 0));
+}
+
+#[test]
+fn test_webp_format() {
+    let img = image::RgbImage::new(256, 256);
+    let mut bytes = Vec::new();
+    img.write_to(
+        &mut std::io::Cursor::new(&mut bytes),
+        image::ImageFormat::WebP,
+    )
+    .unwrap();
+
+    let fp = ImageFingerprinter::fingerprint(&bytes).expect("fingerprint should succeed");
+    assert!(!fp.exact_hash().iter().all(|&b| b == 0));
+}
+
+#[test]
+fn test_bmp_format() {
+    let img = image::RgbImage::new(256, 256);
+    let mut bytes = Vec::new();
+    img.write_to(
+        &mut std::io::Cursor::new(&mut bytes),
+        image::ImageFormat::Bmp,
+    )
+    .unwrap();
+
+    let fp = ImageFingerprinter::fingerprint(&bytes).expect("fingerprint should succeed");
+    assert!(!fp.exact_hash().iter().all(|&b| b == 0));
+}
+
+#[test]
+fn test_small_image_32x32_minimum() {
+    let img = image::RgbImage::new(32, 32);
+    let bytes = encode_png(&img);
+
+    let fp = ImageFingerprinter::fingerprint(&bytes).expect("fingerprint should succeed");
+    assert!(!fp.exact_hash().iter().all(|&b| b == 0));
+}
+
+#[test]
+fn test_small_image_too_small_error() {
+    let img = image::RgbImage::new(7, 7);
+    let bytes = encode_png(&img);
+
+    let result = ImageFingerprinter::fingerprint(&bytes);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("too small"));
+}
