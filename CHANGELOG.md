@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Code quality**:
   - Fixed clippy warnings (needless_range_loop, manual_clamp)
 
-## [0.3.1] - Unreleased
+## [0.3.1] - 2025-03-16
 
 ### Added
 
