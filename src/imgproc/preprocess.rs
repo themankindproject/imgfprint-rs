@@ -31,6 +31,7 @@ const _: () = assert!(
 );
 
 /// Preprocessor with cached resizer and CPU extension detection.
+#[derive(Debug)]
 pub struct Preprocessor {
     resizer: Resizer,
     dst_buffer: Vec<u8>,

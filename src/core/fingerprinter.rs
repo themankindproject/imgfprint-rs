@@ -14,6 +14,7 @@ use std::cell::RefCell;
 ///
 /// Maintains a reusable preprocessor, hasher, and internal buffers
 /// to minimize allocations in high-throughput scenarios.
+#[derive(Debug)]
 pub struct FingerprinterContext {
     preprocessor: Preprocessor,
     exact_hasher: Hasher,

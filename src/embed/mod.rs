@@ -130,6 +130,8 @@ impl Embedding {
 
     /// Returns a clone of the embedding vector.
     ///
+    /// # Performance
+    /// This method allocates and copies the entire vector (O(n)).
     /// For zero-copy access, prefer [`as_slice()`](Embedding::as_slice).
     ///
     /// # Examples
@@ -305,6 +307,12 @@ pub fn semantic_similarity(a: &Embedding, b: &Embedding) -> Result<f32, ImgFprin
             expected: a_vec.len(),
             actual: b_vec.len(),
         });
+    }
+
+    if !a_vec.iter().all(|x| x.is_finite()) || !b_vec.iter().all(|x| x.is_finite()) {
+        return Err(ImgFprintError::InvalidEmbedding(
+            "embedding contains non-finite values (NaN or infinity)".to_string(),
+        ));
     }
 
     // Compute dot product and norms in a single pass for better cache locality

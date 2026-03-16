@@ -58,4 +58,10 @@ impl ImgFprintError {
     pub fn processing_error(msg: impl Into<String>) -> Self {
         Self::ProcessingError(msg.into())
     }
+
+    #[cold]
+    #[inline(never)]
+    pub fn image_too_small(msg: impl Into<String>) -> Self {
+        Self::ImageTooSmall(msg.into())
+    }
 }

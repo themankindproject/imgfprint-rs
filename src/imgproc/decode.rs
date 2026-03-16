@@ -18,11 +18,11 @@ const MAX_INPUT_BYTES: usize = 50 * 1024 * 1024;
 /// - Minimum required dimension is 32x32 pixels for fingerprinting.
 pub fn decode_image(image_bytes: &[u8]) -> Result<DynamicImage, ImgFprintError> {
     if image_bytes.is_empty() {
-        return Err(ImgFprintError::InvalidImage("empty input".to_string()));
+        return Err(ImgFprintError::invalid_image("empty input"));
     }
 
     if image_bytes.len() > MAX_INPUT_BYTES {
-        return Err(ImgFprintError::InvalidImage(format!(
+        return Err(ImgFprintError::invalid_image(format!(
             "input too large: {} bytes exceeds limit of {} bytes",
             image_bytes.len(),
             MAX_INPUT_BYTES
@@ -31,19 +31,19 @@ pub fn decode_image(image_bytes: &[u8]) -> Result<DynamicImage, ImgFprintError> 
 
     let reader = image::ImageReader::new(Cursor::new(image_bytes))
         .with_guessed_format()
-        .map_err(|e| ImgFprintError::DecodeError(format!("format detection failed: {}", e)))?;
+        .map_err(|e| ImgFprintError::decode_error(format!("format detection failed: {}", e)))?;
 
     // Always check dimensions - fail closed if we can't determine them
     match reader.into_dimensions() {
         Ok((width, height)) => {
             if width > MAX_DIMENSION || height > MAX_DIMENSION {
-                return Err(ImgFprintError::InvalidImage(format!(
+                return Err(ImgFprintError::invalid_image(format!(
                     "dimensions {}x{} exceed limit {}x{}",
                     width, height, MAX_DIMENSION, MAX_DIMENSION
                 )));
             }
             if width < MIN_DIMENSION || height < MIN_DIMENSION {
-                return Err(ImgFprintError::ImageTooSmall(format!(
+                return Err(ImgFprintError::image_too_small(format!(
                     "dimensions {}x{} are below minimum {}x{}",
                     width, height, MIN_DIMENSION, MIN_DIMENSION
                 )));
@@ -51,7 +51,7 @@ pub fn decode_image(image_bytes: &[u8]) -> Result<DynamicImage, ImgFprintError> 
         }
         Err(e) => {
             // Fail closed - if we can't verify dimensions, don't proceed
-            return Err(ImgFprintError::DecodeError(format!(
+            return Err(ImgFprintError::decode_error(format!(
                 "failed to read image dimensions: {}",
                 e
             )));
@@ -62,7 +62,7 @@ pub fn decode_image(image_bytes: &[u8]) -> Result<DynamicImage, ImgFprintError> 
         image::ImageError::Unsupported(format) => {
             ImgFprintError::UnsupportedFormat(format!("{:?}", format))
         }
-        image::ImageError::Decoding(err) => ImgFprintError::DecodeError(format!("{}", err)),
-        _ => ImgFprintError::ProcessingError(format!("{}", e)),
+        image::ImageError::Decoding(err) => ImgFprintError::decode_error(err.to_string()),
+        _ => ImgFprintError::processing_error(e.to_string()),
     })
 }

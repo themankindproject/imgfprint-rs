@@ -6,7 +6,7 @@
 /// - **AHash**: Average Hash, fastest, compares pixels to mean
 /// - **PHash**: DCT-based, robust to minor visual changes, slower
 /// - **DHash**: Gradient-based, fast, good for detecting structural changes
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum HashAlgorithm {
     /// Average Hash using mean pixel value threshold.
@@ -19,7 +19,6 @@ pub enum HashAlgorithm {
     ///
     /// Most robust to compression artifacts and minor adjustments.
     /// Computationally intensive due to 2D DCT.
-    #[default]
     PHash,
 
     /// Difference Hash using horizontal gradients.
