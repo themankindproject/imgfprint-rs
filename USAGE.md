@@ -969,7 +969,9 @@ imgfprint = { version = "0.3.1", features = ["tracing"] }
 ```rust
 use imgfprint::ImageFingerprinter;
 
-// Initialize a tracing subscriber
+// Initialize a tracing subscriber with env filter
+// RUST_LOG env var controls the log level: info, debug, trace
+std::env::set_var("RUST_LOG", "info");
 tracing_subscriber::fmt::init();
 
 // Now all fingerprint operations emit trace events
@@ -977,11 +979,19 @@ let fp = ImageFingerprinter::fingerprint(&data).unwrap();
 // Outputs: TRACE fingerprinter: fingerprint completed duration_ms=1.23
 ```
 
+**Environment Variables:**
+- `RUST_LOG=info` - Show info level and above
+- `RUST_LOG=debug` - Show debug level and above  
+- `RUST_LOG=trace` - Show all trace events (most verbose)
+- `RUST_LOG=imgfprint=debug` - Show only imgfprint debug logs
+
 **Traced Operations:**
 - `fingerprint()` - tracks image size, duration
 - `fingerprint_with()` - tracks image size, algorithm, duration
 - `fingerprint_batch()` - tracks image count, parallel/sequential, duration
 - `fingerprint_batch_chunked()` - tracks chunk_size, processed count, failed count, duration
+
+**Note:** If you don't see output, ensure you've set `RUST_LOG` before calling `tracing_subscriber::fmt::init()`. The subscriber uses an env filter by default which requires this environment variable.
 
 ---
 
