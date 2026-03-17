@@ -3,6 +3,9 @@
 use thiserror::Error;
 
 /// Errors that can occur during image fingerprinting.
+///
+/// This error type implements both `Send` and `Sync` for safe use across
+/// threads and async contexts.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Error, Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -113,3 +116,11 @@ impl ImgFprintError {
         Self::ImageTooSmall(msg.into())
     }
 }
+
+// Compile-time assertions to ensure ImgFprintError is Send + Sync
+const _: () = {
+    const fn assert_send<T: Send>() {}
+    const fn assert_sync<T: Sync>() {}
+    assert_send::<ImgFprintError>();
+    assert_sync::<ImgFprintError>();
+};

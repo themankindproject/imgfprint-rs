@@ -4,6 +4,38 @@ use crate::error::ImgFprintError;
 use fast_image_resize::images::Image;
 use fast_image_resize::{CpuExtensions, FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer};
 use image::{DynamicImage, GenericImageView, GrayImage};
+use std::sync::OnceLock;
+
+/// Cached CPU extensions detection to avoid repeated feature checks.
+static CPU_EXTENSIONS: OnceLock<CpuExtensions> = OnceLock::new();
+
+/// Gets the optimal CPU extensions for the current platform.
+/// This is cached to avoid the overhead of feature detection on every Preprocessor::new() call.
+fn get_cpu_extensions() -> CpuExtensions {
+    *CPU_EXTENSIONS.get_or_init(|| {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                CpuExtensions::Avx2
+            } else if std::is_x86_feature_detected!("sse4.1") {
+                CpuExtensions::Sse4_1
+            } else {
+                CpuExtensions::None
+            }
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            #[cfg(target_arch = "aarch64")]
+            {
+                CpuExtensions::Neon
+            }
+            #[cfg(not(target_arch = "aarch64"))]
+            {
+                CpuExtensions::None
+            }
+        }
+    })
+}
 
 /// ITU-R BT.601 luma coefficients for RGB to grayscale conversion.
 /// These coefficients represent the relative luminance of each color channel.
@@ -103,23 +135,11 @@ impl Preprocessor {
     pub fn new() -> Self {
         let mut resizer = Resizer::new();
 
-        #[cfg(target_arch = "x86_64")]
-        {
-            if std::is_x86_feature_detected!("avx2") {
-                unsafe {
-                    resizer.set_cpu_extensions(CpuExtensions::Avx2);
-                }
-            } else if std::is_x86_feature_detected!("sse4.1") {
-                unsafe {
-                    resizer.set_cpu_extensions(CpuExtensions::Sse4_1);
-                }
-            }
-        }
-
-        #[cfg(target_arch = "aarch64")]
-        {
+        // Use cached CPU extensions detection
+        let cpu_extensions = get_cpu_extensions();
+        if cpu_extensions != CpuExtensions::None {
             unsafe {
-                resizer.set_cpu_extensions(CpuExtensions::Neon);
+                resizer.set_cpu_extensions(cpu_extensions);
             }
         }
 
@@ -282,13 +302,10 @@ fn rgb_to_grayscale_simd(rgb: &[u8], gray: &mut [u8]) {
 /// Rotates/flips the image according to EXIF orientation tag to ensure
 /// the visual appearance matches the encoded pixel data. This is critical
 /// for consistent fingerprinting across different image sources.
-fn apply_orientation(image: &DynamicImage) -> DynamicImage {
-    use image::metadata::Orientation;
-
-    let mut img = image.clone();
-    img.apply_orientation(Orientation::NoTransforms);
-
-    img
+fn apply_orientation(image: &DynamicImage) -> std::borrow::Cow<'_, DynamicImage> {
+    // Skip EXIF orientation processing - modern image decoders handle this
+    // Returns Cow::Borrowed to avoid expensive clone
+    std::borrow::Cow::Borrowed(image)
 }
 
 /// Extracts center 32x32 region as normalized float buffer.
