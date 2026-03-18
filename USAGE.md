@@ -567,12 +567,18 @@ let fp = multi.get(HashAlgorithm::PHash);
 pub fn compare(&self, other: &MultiHashFingerprint) -> Similarity
 ```
 
-Compares two multi-hash fingerprints using weighted combination.
+Compares two multi-hash fingerprints using weighted combination with block-level similarity for crop resistance.
 
-**Weights:**
+**Algorithm Weights:**
 - **10%** AHash similarity (average hash, fastest)
-- **60%** PHash similarity (DCT-based, robust to compression)
+- **60%** PHash similarity (DCT-based, robust to compression)  
 - **30%** DHash similarity (gradient-based, good for structural changes)
+
+**Per-Algorithm Composition:**
+- **40%** global hash similarity (overall structure)
+- **60%** block-level similarity (4x4 grid, crop resistance)
+
+This provides superior crop resistance compared to global-only comparison.
 
 **Example:**
 ```rust
@@ -773,6 +779,29 @@ println!("Semantic similarity: {:.4}", similarity);
 ```
 
 **Note:** The library does not include built-in embedding providers. You must implement `EmbeddingProvider` for your use case (OpenAI CLIP, HuggingFace, local models, etc.).
+
+#### Model ID Support
+
+To prevent accidental comparison of embeddings from different models (e.g., comparing 512-dim CLIP with 768-dim CLIP), you can tag embeddings with a model identifier:
+
+```rust
+use imgfprint::Embedding;
+
+// Create embedding with model ID
+let embedding = Embedding::new_with_model(
+    vec![0.1, 0.2, 0.3, /* ... 512 dimensions */],
+    Some("clip-vit-base-patch32".to_string())
+)?;
+
+// The model ID is validated during similarity comparison
+let sim = imgfprint::semantic_similarity(&emb1, &emb2)?;
+// Will error if model IDs differ (prevents meaningless comparisons)
+```
+
+**Benefits:**
+- Prevents comparing incompatible embeddings
+- Explicit model tracking for audit trails
+- Backward compatible (model_id is optional)
 
 #### Local ONNX Models
 

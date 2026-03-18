@@ -10,6 +10,11 @@ use crate::imgproc::preprocess::{extract_blocks, extract_global_region, Preproce
 use blake3::Hasher;
 use std::cell::RefCell;
 
+// Module-level shared thread-local context to avoid duplication
+thread_local! {
+    static SHARED_CTX: RefCell<FingerprinterContext> = RefCell::new(FingerprinterContext::new());
+}
+
 #[cfg(feature = "tracing")]
 use tracing::{debug, instrument};
 
@@ -317,11 +322,7 @@ impl ImageFingerprinter {
         #[cfg(feature = "tracing")]
         let start = std::time::Instant::now();
 
-        thread_local! {
-            static CTX: RefCell<FingerprinterContext> = RefCell::new(FingerprinterContext::new());
-        }
-
-        let result = CTX.with(|ctx| ctx.borrow_mut().fingerprint(image_bytes));
+        let result = SHARED_CTX.with(|ctx| ctx.borrow_mut().fingerprint(image_bytes));
 
         #[cfg(feature = "tracing")]
         debug!(
@@ -348,11 +349,8 @@ impl ImageFingerprinter {
         #[cfg(feature = "tracing")]
         let start = std::time::Instant::now();
 
-        thread_local! {
-            static CTX: RefCell<FingerprinterContext> = RefCell::new(FingerprinterContext::new());
-        }
-
-        let result = CTX.with(|ctx| ctx.borrow_mut().fingerprint_with(image_bytes, algorithm));
+        let result =
+            SHARED_CTX.with(|ctx| ctx.borrow_mut().fingerprint_with(image_bytes, algorithm));
 
         #[cfg(feature = "tracing")]
         debug!(

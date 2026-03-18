@@ -67,6 +67,13 @@ pub use local::{LocalProvider, LocalProviderConfig};
 #[derive(Debug, Clone, PartialEq)]
 pub struct Embedding {
     vector: Vec<f32>,
+    /// Optional model identifier to prevent comparing embeddings from different models.
+    ///
+    /// Comparing embeddings from different models (e.g., 512-dim CLIP vs 768-dim CLIP)
+    /// is semantically meaningless even if dimensions match. This field enables
+    /// detection of such mismatches.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    model_id: Option<String>,
 }
 
 impl Embedding {
@@ -94,6 +101,25 @@ impl Embedding {
     /// # }
     /// ```
     pub fn new(vector: Vec<f32>) -> Result<Self, ImgFprintError> {
+        Self::new_with_model(vector, None)
+    }
+
+    /// Creates a new embedding from a vector with an optional model identifier.
+    ///
+    /// # Arguments
+    ///
+    /// * `vector` - The embedding vector. Must be non-empty and contain only finite values.
+    /// * `model_id` - Optional model identifier (e.g., "clip-vit-base-patch32")
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ImgFprintError::InvalidEmbedding`] if:
+    /// - The vector is empty
+    /// - Any element is NaN or infinity
+    pub fn new_with_model(
+        vector: Vec<f32>,
+        model_id: Option<String>,
+    ) -> Result<Self, ImgFprintError> {
         if vector.is_empty() {
             return Err(ImgFprintError::InvalidEmbedding(
                 "embedding vector cannot be empty".to_string(),
@@ -106,7 +132,13 @@ impl Embedding {
             ));
         }
 
-        Ok(Self { vector })
+        Ok(Self { vector, model_id })
+    }
+
+    /// Returns the model identifier if set.
+    #[inline]
+    pub fn model_id(&self) -> Option<&str> {
+        self.model_id.as_deref()
     }
 
     /// Returns the embedding vector as a slice.
@@ -291,6 +323,16 @@ pub trait EmbeddingProvider {
 /// # }
 /// ```
 pub fn semantic_similarity(a: &Embedding, b: &Embedding) -> Result<f32, ImgFprintError> {
+    // Check for model ID mismatch
+    if let (Some(a_model), Some(b_model)) = (a.model_id(), b.model_id()) {
+        if a_model != b_model {
+            return Err(ImgFprintError::InvalidEmbedding(format!(
+                "model ID mismatch: '{}' vs '{}'",
+                a_model, b_model
+            )));
+        }
+    }
+
     let a_vec = a.as_slice();
     let b_vec = b.as_slice();
 
@@ -502,6 +544,7 @@ mod tests {
         // Since Embedding::new validates against this, we manually construct
         let zero_embedding = Embedding {
             vector: vec![0.0; 3],
+            model_id: None,
         };
 
         let result = semantic_similarity(&a, &zero_embedding);
@@ -571,5 +614,58 @@ mod tests {
             result,
             Err(ImgFprintError::ProviderError(msg)) if msg == "network timeout"
         ));
+    }
+
+    #[test]
+    fn test_embedding_new_with_model() {
+        let vector = vec![0.1, 0.2, 0.3, 0.4];
+        let embedding =
+            Embedding::new_with_model(vector.clone(), Some("clip-vit-base-patch32".to_string()))
+                .unwrap();
+
+        assert_eq!(embedding.len(), 4);
+        assert_eq!(embedding.model_id(), Some("clip-vit-base-patch32"));
+        assert_eq!(embedding.as_slice(), &vector);
+    }
+
+    #[test]
+    fn test_embedding_model_id_mismatch() {
+        let a = Embedding::new_with_model(vec![0.1; 512], Some("model-a".to_string())).unwrap();
+        let b = Embedding::new_with_model(vec![0.1; 512], Some("model-b".to_string())).unwrap();
+
+        let result = semantic_similarity(&a, &b);
+        assert!(matches!(
+            result,
+            Err(ImgFprintError::InvalidEmbedding(msg)) if msg.contains("model ID mismatch")
+        ));
+    }
+
+    #[test]
+    fn test_embedding_same_model_id_ok() {
+        let a =
+            Embedding::new_with_model(vec![1.0; 512], Some("clip-vit-base-patch32".to_string()))
+                .unwrap();
+        let b =
+            Embedding::new_with_model(vec![1.0; 512], Some("clip-vit-base-patch32".to_string()))
+                .unwrap();
+
+        let sim = semantic_similarity(&a, &b).unwrap();
+        assert!((sim - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_embedding_missing_model_id_ok() {
+        // When one or both lack model_id, comparison should work
+        let a = Embedding::new(vec![1.0; 512]).unwrap();
+        let b = Embedding::new_with_model(vec![1.0; 512], None).unwrap();
+        let c = Embedding::new_with_model(vec![1.0; 512], Some("model-a".to_string())).unwrap();
+
+        // Both without model_id
+        let sim1 = semantic_similarity(&a, &b).unwrap();
+        assert!((sim1 - 1.0).abs() < 1e-6);
+
+        // One without, one with - should still work
+        let sim2 = semantic_similarity(&a, &c).unwrap();
+        assert!((sim2 - 1.0).abs() < 1e-6);
     }
 }

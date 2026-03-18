@@ -21,14 +21,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Fixed buffer reclamation order bug in image preprocessing
   - Fixed `apply_orientation()` unnecessarily cloning entire image - now uses `Cow::Borrowed` to avoid expensive clone when no EXIF orientation transform is needed
   - Fixed SIMD CPU extension detection being performed on every `Preprocessor::new()` call - now cached globally using `OnceLock` for better performance
+  - **Fixed DCT-II implementation** in PHash: Added proper twiddle factors for mathematically correct DCT-II computation
+  - **Fixed duplicate thread-local contexts**: Both `fingerprint()` and `fingerprint_with()` now share a single module-level TLS slot instead of creating separate ones
+  - **Fixed unsafe memory operations**: Replaced `unsafe { set_len() }` with safe `resize()` in preprocessing buffers
+  - **Fixed EXIF orientation handling**: Now reads EXIF orientation from raw bytes before decoding and applies transformations (rotate/flip) to decoded image
+  - **Fixed similarity algorithm consistency**: `MultiHashFingerprint::compare()` now includes block-level similarity (60% weight) for consistent crop resistance with single-algorithm mode
+  - **Fixed error handling in DCT**: Changed `unwrap()` to proper `Result` propagation in `dct2_32()`
 
 - **API improvements**:
   - Made `hash_similarity()` and `hamming_distance()` public utilities
   - Added fast-path for exact match in similarity comparison
   - Added compile-time assertions verifying `ImgFprintError` implements `Send + Sync` for safe use in async and multi-threaded contexts
+  - **Added model ID support to embeddings**: `Embedding::new_with_model()` allows tagging embeddings with model identifiers to prevent comparing incompatible models
+  - **Fixed serde feature gating**: `serde` crate is now properly optional (not compiled unless feature enabled)
 
 - **Code quality**:
   - Fixed clippy warnings (needless_range_loop, manual_clamp)
+  - Added `kamadak-exif` dependency for EXIF orientation parsing
+  - Updated bincode dev-dependency comment documenting v2 API changes
 
 ## [0.3.1] - 2025-03-16
 

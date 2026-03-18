@@ -34,7 +34,9 @@ Perfect for:
 - **Deterministic Output** - Same input always produces same fingerprint
 - **BLAKE3 Exact Hash** - Byte-identical detection (6-8x faster than SHA256)
 - **Block-Level Hashing** - 4x4 grid for crop resistance
+- **EXIF Orientation** - Automatically corrects JPEG orientation from camera metadata
 - **Semantic Embeddings** - CLIP-style vector representations via external providers or local ONNX models
+- **Embedding Model ID** - Tag embeddings with model identifiers to prevent comparing incompatible models
 - **SIMD Acceleration** - AVX2/NEON optimized resizing
 - **Parallel Processing** - Multi-core batch operations
 - **Zero-Copy APIs** - Minimal allocations in hot paths
@@ -148,7 +150,7 @@ ImageFingerprint
 
 ### Algorithm Pipeline
 
-1. **Decode** - Parse any supported format (PNG, JPEG, GIF, WebP, BMP) into RGB
+1. **Decode** - Parse any supported format (PNG, JPEG, GIF, WebP, BMP) into RGB with EXIF orientation correction for JPEG
 2. **Normalize** - Resize to 256x256 using SIMD-accelerated Lanczos3 filter
 3. **Convert** - RGB to Grayscale (luminance)
 4. **Parallel Hash Computation** - All three algorithms computed simultaneously:
@@ -159,13 +161,17 @@ ImageFingerprint
 
 ### Multi-Algorithm Comparison
 
-When using `MultiHashFingerprint`, the similarity score uses weighted combination:
+When using `MultiHashFingerprint`, the similarity score uses weighted combination with block-level similarity:
 
 - **10%** AHash similarity (average hash, fastest, simplest)
 - **60%** PHash similarity (DCT-based, robust to compression)
 - **30%** DHash similarity (gradient-based, good for structural changes)
 
-This provides better accuracy than any single algorithm alone.
+Within each algorithm, similarity is computed as:
+- **40%** global hash similarity (overall structure)
+- **60%** block-level similarity (crop resistance via 4x4 grid)
+
+This provides superior crop resistance compared to global-only comparison.
 
 ## Performance
 

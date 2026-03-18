@@ -172,15 +172,10 @@ impl Preprocessor {
             .map_err(|e| ImgFprintError::ProcessingError(format!("invalid source image: {}", e)))?;
 
         // Reuse destination buffer to avoid allocation
-        #[allow(clippy::uninit_vec)]
-        unsafe {
-            // Safety: We just reserved exactly target_len bytes, so set_len is safe.
-            // The buffer contains uninitialized bytes which are always valid for u8.
-            self.dst_buffer.clear();
-            let target_len = (NORMALIZED_SIZE * NORMALIZED_SIZE * 3) as usize;
-            self.dst_buffer.reserve(target_len);
-            self.dst_buffer.set_len(target_len);
-        }
+        // Use resize instead of unsafe set_len to ensure initialization
+        self.dst_buffer.clear();
+        let target_len = (NORMALIZED_SIZE * NORMALIZED_SIZE * 3) as usize;
+        self.dst_buffer.resize(target_len, 0u8);
         let dst_buffer = std::mem::take(&mut self.dst_buffer);
 
         let mut dst = Image::from_vec_u8(
@@ -207,15 +202,10 @@ impl Preprocessor {
         let rgb_bytes = dst.into_vec();
 
         // Reuse grayscale buffer
-        #[allow(clippy::uninit_vec)]
-        unsafe {
-            // Safety: We just reserved exactly gray_target_len bytes, so set_len is safe.
-            // The buffer contains uninitialized bytes which are always valid for u8.
-            self.gray_buffer.clear();
-            let gray_target_len = (NORMALIZED_SIZE * NORMALIZED_SIZE) as usize;
-            self.gray_buffer.reserve(gray_target_len);
-            self.gray_buffer.set_len(gray_target_len);
-        }
+        // Use resize instead of unsafe set_len to ensure initialization
+        self.gray_buffer.clear();
+        let gray_target_len = (NORMALIZED_SIZE * NORMALIZED_SIZE) as usize;
+        self.gray_buffer.resize(gray_target_len, 0u8);
 
         // SIMD-friendly grayscale conversion with better cache locality
         // Process in chunks to improve CPU pipeline efficiency

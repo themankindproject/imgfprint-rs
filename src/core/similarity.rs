@@ -35,6 +35,9 @@ pub fn hash_similarity(distance: u32) -> f32 {
 ///
 /// Uses a pre-computed population count table for faster computation
 /// than the built-in count_ones() on 64-bit values.
+///
+/// Note: On modern x86-64 CPUs with POPCNT instruction, `count_ones()`
+/// may be faster. Benchmark both approaches for your specific use case.
 #[inline(always)]
 pub fn hamming_distance(a: u64, b: u64) -> u32 {
     let xor = a ^ b;
@@ -133,7 +136,7 @@ pub fn compute_similarity(a: &ImageFingerprint, b: &ImageFingerprint) -> Similar
 /// For example, if image A is cropped to show only the top-left quadrant,
 /// blocks in the bottom-right of A won't match B, but the top-left blocks
 /// will still contribute to the similarity score.
-fn compute_block_similarity(a: &[u64; 16], b: &[u64; 16]) -> f32 {
+pub fn compute_block_similarity(a: &[u64; 16], b: &[u64; 16]) -> f32 {
     let mut total_similarity = 0.0f32;
     let mut valid_comparisons = 0u32;
 

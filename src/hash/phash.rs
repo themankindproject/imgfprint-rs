@@ -2,6 +2,7 @@
 
 use realfft::RealFftPlanner;
 use rustfft::num_complex::Complex32;
+use std::f32::consts::PI;
 use std::sync::{Arc, OnceLock};
 
 const HASH_SIZE: usize = 8;
@@ -24,12 +25,13 @@ fn get_fft_plan() -> Arc<dyn realfft::RealToComplex<f32>> {
 
 /// Computes DCT-II of length 32 using real FFT.
 ///
-/// Uses the algorithm: DCT-II(x) = 2 * Re{FFT(y)} where y is a permuted version of x.
-/// This is more efficient than direct DCT and leverages SIMD-accelerated FFT.
+/// Uses the algorithm: DCT-II(x) = 2 * Re{exp(-j·π·k/(2·N)) · FFT(y)}
+/// where y is a permuted version of x. This is more efficient than direct DCT
+/// and leverages SIMD-accelerated FFT.
 ///
 /// Uses stack-allocated buffers to avoid heap allocation and RefCell overhead.
 #[inline(always)]
-fn dct2_32(input: &[f32], output: &mut [f32]) {
+fn dct2_32(input: &[f32], output: &mut [f32]) -> Result<(), crate::error::ImgFprintError> {
     debug_assert_eq!(input.len(), 32);
     debug_assert_eq!(output.len(), 32);
 
@@ -47,15 +49,28 @@ fn dct2_32(input: &[f32], output: &mut [f32]) {
     }
 
     // Forward FFT (requires mutable input buffer)
-    fft.process(&mut buffer, &mut complex_buffer).unwrap();
+    fft.process(&mut buffer, &mut complex_buffer).map_err(|e| {
+        crate::error::ImgFprintError::processing_error(format!("DCT FFT failed: {}", e))
+    })?;
 
-    // Extract real part and scale
+    // Extract with twiddle factors and scale
+    // Correct extraction with twiddle factors for DCT-II
     const SCALE: f32 = 2.0 / 32.0;
     output[0] = complex_buffer[0].re * SCALE;
-    for (i, item) in output.iter_mut().enumerate().take(32).skip(1) {
-        let k = i.min(32 - i);
-        *item = complex_buffer[k].re * SCALE;
+    for k in 1..32 {
+        let angle = -PI * k as f32 / (2.0 * 32.0);
+        let twiddle_re = angle.cos();
+        let twiddle_im = angle.sin();
+        let re = complex_buffer[k.min(32 - k)].re;
+        let im = if k < 17 {
+            complex_buffer[k].im
+        } else {
+            -complex_buffer[32 - k].im
+        };
+        output[k] = (re * twiddle_re - im * twiddle_im) * SCALE;
     }
+
+    Ok(())
 }
 
 /// Computes perceptual hash from a 32x32 grayscale buffer.
@@ -72,7 +87,8 @@ pub fn compute_phash(pixels: &[f32; DCT_SIZE * DCT_SIZE]) -> u64 {
     for row in 0..DCT_SIZE {
         let start = row * DCT_SIZE;
         row_buffer.copy_from_slice(&pixels[start..start + DCT_SIZE]);
-        dct2_32(&row_buffer, &mut col_buffer[start..start + DCT_SIZE]);
+        dct2_32(&row_buffer, &mut col_buffer[start..start + DCT_SIZE])
+            .expect("DCT should not fail for fixed-size inputs");
     }
 
     // Column-wise DCT (transpose then DCT rows)
@@ -86,7 +102,7 @@ pub fn compute_phash(pixels: &[f32; DCT_SIZE * DCT_SIZE]) -> u64 {
             col_input[row] = col_buffer[row * DCT_SIZE + col];
         }
 
-        dct2_32(&col_input, &mut col_output);
+        dct2_32(&col_input, &mut col_output).expect("DCT should not fail for fixed-size inputs");
 
         // Store only top HASH_SIZE rows
         for row in 0..HASH_SIZE {
@@ -321,10 +337,10 @@ mod tests {
     fn test_dct2_32_symmetric_input() {
         let input: [f32; 32] = std::array::from_fn(|i| (i % 256) as f32 / 255.0);
         let mut output = [0.0f32; 32];
-        dct2_32(&input, &mut output);
+        dct2_32(&input, &mut output).unwrap();
 
         let mut output2 = [0.0f32; 32];
-        dct2_32(&input, &mut output2);
+        dct2_32(&input, &mut output2).unwrap();
 
         assert_eq!(output, output2);
     }

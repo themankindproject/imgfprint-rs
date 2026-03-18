@@ -185,10 +185,14 @@ impl MultiHashFingerprint {
 
     /// Compares two multi-hash fingerprints using weighted combination.
     ///
-    /// Uses weighted combination:
+    /// Uses weighted combination of algorithm similarities:
     /// - 10% AHash similarity (average hash, fastest)
     /// - 60% PHash similarity (DCT-based, robust to compression)
     /// - 30% DHash similarity (gradient-based, good for structural changes)
+    ///
+    /// Each algorithm's similarity includes both global and block-level hashing
+    /// for improved crop resistance. Block hashes are weighted at 60% and global
+    /// hashes at 40% within each algorithm.
     ///
     /// Returns a Similarity struct with combined score and component distances.
     ///
@@ -198,6 +202,7 @@ impl MultiHashFingerprint {
     /// * `other` - The fingerprint to compare against
     #[must_use]
     pub fn compare(&self, other: &MultiHashFingerprint) -> Similarity {
+        use crate::core::similarity::{compute_similarity, hamming_distance};
         use subtle::ConstantTimeEq;
 
         let exact_match = self.exact.ct_eq(&other.exact).into();
@@ -211,17 +216,18 @@ impl MultiHashFingerprint {
             };
         }
 
-        let ahash_dist = self.ahash.distance(&other.ahash);
-        let phash_dist = self.phash.distance(&other.phash);
-        let dhash_dist = self.dhash.distance(&other.dhash);
-
-        // Use shared hash_similarity function for consistency
-        let ahash_sim = hash_similarity(ahash_dist);
-        let phash_sim = hash_similarity(phash_dist);
-        let dhash_sim = hash_similarity(dhash_dist);
+        // Compute per-algorithm similarities including block-level comparison
+        let ahash_sim = compute_similarity(&self.ahash, &other.ahash).score;
+        let phash_sim = compute_similarity(&self.phash, &other.phash).score;
+        let dhash_sim = compute_similarity(&self.dhash, &other.dhash).score;
 
         let weighted_score =
             ahash_sim * AHASH_WEIGHT + phash_sim * PHASH_WEIGHT + dhash_sim * DHASH_WEIGHT;
+
+        // Use global hash distances for perceptual_distance (backward compatibility)
+        let ahash_dist = hamming_distance(self.ahash.global_hash, other.ahash.global_hash);
+        let phash_dist = hamming_distance(self.phash.global_hash, other.phash.global_hash);
+        let dhash_dist = hamming_distance(self.dhash.global_hash, other.dhash.global_hash);
 
         let avg_distance = ((ahash_dist as f32 * AHASH_WEIGHT)
             + (phash_dist as f32 * PHASH_WEIGHT)

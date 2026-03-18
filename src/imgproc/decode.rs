@@ -1,6 +1,7 @@
-//! Image decoding with dimension validation.
+//! Image decoding with dimension validation and EXIF orientation support.
 
 use crate::error::ImgFprintError;
+use exif::{In, Reader, Tag};
 use image::DynamicImage;
 use std::io::Cursor;
 
@@ -10,6 +11,44 @@ const MIN_DIMENSION: u32 = 32;
 /// Maximum input size: 50MB - prevents memory exhaustion from maliciously large inputs.
 /// This limit prevents OOM attacks while still allowing typical high-res images.
 const MAX_INPUT_BYTES: usize = 50 * 1024 * 1024;
+
+/// Reads EXIF orientation from image bytes.
+/// Returns orientation value (1-8) or 1 if no EXIF data found.
+fn read_exif_orientation(image_bytes: &[u8]) -> u32 {
+    let mut cursor = Cursor::new(image_bytes);
+    let exif_reader = Reader::new();
+
+    match exif_reader.read_from_container(&mut cursor) {
+        Ok(exif) => {
+            if let Some(orientation_field) = exif.get_field(Tag::Orientation, In::PRIMARY) {
+                if let Some(orientation) = orientation_field.value.get_uint(0) {
+                    if (1..=8).contains(&orientation) {
+                        return orientation;
+                    }
+                }
+            }
+        }
+        Err(_) => {
+            // No EXIF data or error reading it - default to no transformation
+        }
+    }
+
+    1 // Default: no transformation
+}
+
+/// Applies EXIF orientation transformation to an image.
+fn apply_orientation_transform(image: DynamicImage, orientation: u32) -> DynamicImage {
+    match orientation {
+        2 => image.fliph(),
+        3 => image.rotate180(),
+        4 => image.flipv(),
+        5 => image.rotate90().fliph(),
+        6 => image.rotate90(),
+        7 => image.rotate270().fliph(),
+        8 => image.rotate270(),
+        _ => image, // 1 or invalid - no transformation
+    }
+}
 
 /// Decodes image bytes and validates dimensions.
 ///
@@ -76,7 +115,11 @@ pub fn decode_image(image_bytes: &[u8]) -> Result<DynamicImage, ImgFprintError> 
         other => ImgFprintError::ProcessingError(format!("image processing error: {}", other)),
     })?;
 
-    Ok(image)
+    // Apply EXIF orientation transformation
+    let orientation = read_exif_orientation(image_bytes);
+    let oriented_image = apply_orientation_transform(image, orientation);
+
+    Ok(oriented_image)
 }
 
 #[cfg(test)]
