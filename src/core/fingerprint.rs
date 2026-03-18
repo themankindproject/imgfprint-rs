@@ -3,13 +3,13 @@ use crate::hash::algorithms::HashAlgorithm;
 
 /// Weights for weighted combination of algorithm similarities.
 ///
-/// Default: AHash 10%, PHash 60%, DHash 30%
+/// Default: `AHash` 10%, `PHash` 60%, `DHash` 30%
 ///
 /// These weights were determined empirically to maximize accuracy across
 /// diverse image transformations:
-/// - PHash receives highest weight (60%) due to superior robustness to compression
-/// - DHash receives moderate weight (30%) for structural change detection
-/// - AHash receives lowest weight (10%) as a fast baseline
+/// - `PHash` receives highest weight (60%) due to superior robustness to compression
+/// - `DHash` receives moderate weight (30%) for structural change detection
+/// - `AHash` receives lowest weight (10%) as a fast baseline
 const AHASH_WEIGHT: f32 = 0.10;
 const PHASH_WEIGHT: f32 = 0.60;
 const DHASH_WEIGHT: f32 = 0.30;
@@ -48,6 +48,7 @@ impl ImageFingerprint {
     /// Two images with identical byte content will have matching exact hashes.
     /// Use this for exact deduplication before perceptual comparison.
     #[inline]
+    #[must_use]
     pub fn exact_hash(&self) -> &[u8; 32] {
         &self.exact
     }
@@ -56,8 +57,9 @@ impl ImageFingerprint {
     ///
     /// This hash captures the overall structure of the image and is robust
     /// to minor changes in compression and color adjustments. The algorithm
-    /// used (PHash or DHash) depends on which was specified when creating the fingerprint.
+    /// used (`PHash` or `DHash`) depends on which was specified when creating the fingerprint.
     #[inline]
+    #[must_use]
     pub fn global_hash(&self) -> u64 {
         self.global_hash
     }
@@ -67,6 +69,7 @@ impl ImageFingerprint {
     /// Block hashes enable crop-resistant comparison by matching partial
     /// regions between images. Each hash covers a 64x64 pixel region.
     #[inline]
+    #[must_use]
     pub fn block_hashes(&self) -> &[u64; 16] {
         &self.block_hashes
     }
@@ -74,7 +77,7 @@ impl ImageFingerprint {
     /// Computes the Hamming distance between this and another fingerprint's global hash.
     ///
     /// Returns a value from 0 (identical) to 64 (completely different).
-    #[inline(always)]
+    #[inline]
     #[must_use]
     pub fn distance(&self, other: &ImageFingerprint) -> u32 {
         (self.global_hash ^ other.global_hash).count_ones()
@@ -104,8 +107,7 @@ impl ImageFingerprint {
     pub fn is_similar(&self, other: &ImageFingerprint, threshold: f32) -> bool {
         debug_assert!(
             (0.0..=1.0).contains(&threshold),
-            "threshold must be in range [0.0, 1.0], got {}",
-            threshold
+            "threshold must be in range [0.0, 1.0], got {threshold}"
         );
         if self.exact == other.exact {
             return true;
@@ -152,29 +154,34 @@ impl MultiHashFingerprint {
 
     /// Returns the BLAKE3 hash of the original image bytes.
     #[inline]
+    #[must_use]
     pub fn exact_hash(&self) -> &[u8; 32] {
         &self.exact
     }
 
     /// Returns the AHash-based fingerprint.
     #[inline]
+    #[must_use]
     pub fn ahash(&self) -> &ImageFingerprint {
         &self.ahash
     }
 
     /// Returns the PHash-based fingerprint.
     #[inline]
+    #[must_use]
     pub fn phash(&self) -> &ImageFingerprint {
         &self.phash
     }
 
     /// Returns the DHash-based fingerprint.
     #[inline]
+    #[must_use]
     pub fn dhash(&self) -> &ImageFingerprint {
         &self.dhash
     }
 
     /// Returns the fingerprint for a specific algorithm.
+    #[must_use]
     pub fn get(&self, algorithm: HashAlgorithm) -> &ImageFingerprint {
         match algorithm {
             HashAlgorithm::AHash => &self.ahash,
@@ -186,9 +193,9 @@ impl MultiHashFingerprint {
     /// Compares two multi-hash fingerprints using weighted combination.
     ///
     /// Uses weighted combination of algorithm similarities:
-    /// - 10% AHash similarity (average hash, fastest)
-    /// - 60% PHash similarity (DCT-based, robust to compression)
-    /// - 30% DHash similarity (gradient-based, good for structural changes)
+    /// - 10% `AHash` similarity (average hash, fastest)
+    /// - 60% `PHash` similarity (DCT-based, robust to compression)
+    /// - 30% `DHash` similarity (gradient-based, good for structural changes)
     ///
     /// Each algorithm's similarity includes both global and block-level hashing
     /// for improved crop resistance. Block hashes are weighted at 60% and global
@@ -229,6 +236,11 @@ impl MultiHashFingerprint {
         let phash_dist = hamming_distance(self.phash.global_hash, other.phash.global_hash);
         let dhash_dist = hamming_distance(self.dhash.global_hash, other.dhash.global_hash);
 
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
         let avg_distance = ((ahash_dist as f32 * AHASH_WEIGHT)
             + (phash_dist as f32 * PHASH_WEIGHT)
             + (dhash_dist as f32 * DHASH_WEIGHT)) as u32;

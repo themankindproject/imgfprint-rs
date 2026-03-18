@@ -67,7 +67,12 @@ pub enum ImgFprintError {
     /// - Comparing embeddings from different models with different output dimensions
     /// - Calling [`semantic_similarity`](crate::embed::semantic_similarity) with mismatched vectors
     #[error("embedding dimension mismatch: expected {expected}, got {actual}")]
-    EmbeddingDimensionMismatch { expected: usize, actual: usize },
+    EmbeddingDimensionMismatch {
+        /// Expected dimension from the first embedding
+        expected: usize,
+        /// Actual dimension from the second embedding
+        actual: usize,
+    },
 
     /// Provider error occurred during embedding generation.
     ///
@@ -92,24 +97,28 @@ pub enum ImgFprintError {
 }
 
 impl ImgFprintError {
+    /// Creates a decode error with the given message.
     #[cold]
     #[inline(never)]
     pub fn decode_error(msg: impl Into<String>) -> Self {
         Self::DecodeError(msg.into())
     }
 
+    /// Creates an invalid image error with the given message.
     #[cold]
     #[inline(never)]
     pub fn invalid_image(msg: impl Into<String>) -> Self {
         Self::InvalidImage(msg.into())
     }
 
+    /// Creates a processing error with the given message.
     #[cold]
     #[inline(never)]
     pub fn processing_error(msg: impl Into<String>) -> Self {
         Self::ProcessingError(msg.into())
     }
 
+    /// Creates an image too small error with the given message.
     #[cold]
     #[inline(never)]
     pub fn image_too_small(msg: impl Into<String>) -> Self {

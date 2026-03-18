@@ -109,27 +109,27 @@ impl FingerprinterContext {
                 },
             );
 
-            let (global_ahash, block_ahashes) = ahash_result;
-            let (global_hash, block_hashes) = phash_result;
-            let (global_dhash, block_dhashes) = dhash_result;
+            let (ahash_global, ahash_blocks) = ahash_result;
+            let (phash_global, phash_blocks) = phash_result;
+            let (dhash_global, dhash_blocks) = dhash_result;
 
             (
-                ImageFingerprint::new(exact_hash, global_ahash, block_ahashes),
-                ImageFingerprint::new(exact_hash, global_hash, block_hashes),
-                ImageFingerprint::new(exact_hash, global_dhash, block_dhashes),
+                ImageFingerprint::new(exact_hash, ahash_global, ahash_blocks),
+                ImageFingerprint::new(exact_hash, phash_global, phash_blocks),
+                ImageFingerprint::new(exact_hash, dhash_global, dhash_blocks),
             )
         };
 
         #[cfg(not(feature = "parallel"))]
         let (ahash_fp, phash_fp, dhash_fp) = {
-            let (global_ahash, block_ahashes) = Self::compute_ahash_data(&global_region, &blocks);
-            let (global_hash, block_hashes) = Self::compute_phash_data(&global_region, &blocks);
-            let (global_dhash, block_dhashes) = Self::compute_dhash_data(&global_region, &blocks);
+            let (ahash_global, ahash_blocks) = Self::compute_ahash_data(&global_region, &blocks);
+            let (phash_global, phash_blocks) = Self::compute_phash_data(&global_region, &blocks);
+            let (dhash_global, dhash_blocks) = Self::compute_dhash_data(&global_region, &blocks);
 
             (
-                ImageFingerprint::new(exact_hash, global_ahash, block_ahashes),
-                ImageFingerprint::new(exact_hash, global_hash, block_hashes),
-                ImageFingerprint::new(exact_hash, global_dhash, block_dhashes),
+                ImageFingerprint::new(exact_hash, ahash_global, ahash_blocks),
+                ImageFingerprint::new(exact_hash, phash_global, phash_blocks),
+                ImageFingerprint::new(exact_hash, dhash_global, dhash_blocks),
             )
         };
 

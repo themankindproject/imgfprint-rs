@@ -3,7 +3,7 @@
 //! Provides perceptual hashing with crop resistance for image
 //! deduplication and similarity detection in production systems.
 //!
-//! Supports multiple algorithms (PHash, DHash) with automatic parallel
+//! Supports multiple algorithms (`PHash`, `DHash`) with automatic parallel
 //! computation for improved accuracy.
 //!
 //! ## Quick Start
@@ -12,7 +12,6 @@
 //!
 //! ```rust
 //! use imgfprint::ImageFingerprinter;
-//!
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let fp1 = ImageFingerprinter::fingerprint(&std::fs::read("img1.jpg")?)?;
 //! let fp2 = ImageFingerprinter::fingerprint(&std::fs::read("img2.jpg")?)?;
@@ -63,6 +62,8 @@
 //! - **Cached DCT plans**: Reuses DCT computation plans across all calls
 //! - **Buffer reuse**: Context API minimizes allocations in high-throughput scenarios
 //! - **Parallel processing**: Batch operations use rayon for multi-core speedup
+
+#![deny(missing_docs)]
 
 mod core;
 mod embed;

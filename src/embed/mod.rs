@@ -351,20 +351,20 @@ pub fn semantic_similarity(a: &Embedding, b: &Embedding) -> Result<f32, ImgFprin
 
     // Compute dot product and norms in a single pass for better cache locality
     let mut dot_product: f32 = 0.0;
-    let mut norm_a_sq: f32 = 0.0;
-    let mut norm_b_sq: f32 = 0.0;
+    let mut norm_first_sq: f32 = 0.0;
+    let mut norm_second_sq: f32 = 0.0;
 
     for i in 0..a_vec.len() {
         let a_i = a_vec[i];
         let b_i = b_vec[i];
 
         dot_product += a_i * b_i;
-        norm_a_sq += a_i * a_i;
-        norm_b_sq += b_i * b_i;
+        norm_first_sq += a_i * a_i;
+        norm_second_sq += b_i * b_i;
     }
 
-    let norm_a = norm_a_sq.sqrt();
-    let norm_b = norm_b_sq.sqrt();
+    let norm_a = norm_first_sq.sqrt();
+    let norm_b = norm_second_sq.sqrt();
 
     // Handle zero vectors (shouldn't happen with valid embeddings, but be safe)
     if norm_a == 0.0 || norm_b == 0.0 {
