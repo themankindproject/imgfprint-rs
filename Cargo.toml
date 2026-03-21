@@ -10,6 +10,14 @@ documentation = "https://docs.rs/imgfprint"
 rust-version = "1.70"
 repository = "https://github.com/themankindproject/imgfprint-rs"
 readme = "README.md"
+exclude      = [
+    ".github/**",
+    "benches/**",
+    "examples/**",
+    "tests/**",
+    "fuzz/**",
+    "*.sh",
+]
 
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
