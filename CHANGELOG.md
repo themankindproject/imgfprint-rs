@@ -13,9 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Use hardware POPCNT via `count_ones()` for Hamming distance (replaces byte-level lookup table)
   - Cache ONNX `RunnableModel` in `LocalProvider` to eliminate per-inference model clone + optimization overhead
   - Removed redundant O(n) finiteness re-validation in `semantic_similarity()` (invariant already guaranteed by `Embedding::new()`)
+  - Removed `#[repr(align(64))]` from `ImageFingerprint` and `MultiHashFingerprint` (32 and 192 bytes wasted padding respectively)
+
+- **API improvements**:
+  - Added `compute_block_similarity_with_threshold()` for configurable block distance threshold
+  - Added `compute_similarity_with_threshold()` for custom block matching strictness
+  - Added `MultiHashFingerprint::compare_with_threshold()` for threshold-aware comparison
 
 - **Code quality**:
   - Removed dead code: no-op `apply_orientation()` wrapper in preprocess (EXIF handled in decode module)
+  - Renamed `rgb_to_grayscale_simd` to `rgb_to_grayscale` (was not actual SIMD, misleading name)
+  - Deduplicated `ImageFingerprinter::fingerprint_batch_chunked` (now delegates to `FingerprinterContext`)
   - Fixed clippy warnings (type_complexity)
 
 ## [0.3.2] - 2025-03-18

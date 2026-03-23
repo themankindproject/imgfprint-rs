@@ -19,14 +19,9 @@ const DHASH_WEIGHT: f32 = 0.30;
 /// Fingerprints are deterministic and comparable across platforms. The structure
 /// includes exact hashing for identical detection and perceptual hashing for
 /// similarity detection with resistance to resizing, compression, and cropping.
-///
-/// # Cache Alignment
-/// This struct is cache-line aligned (64 bytes) for optimal performance on
-/// modern CPUs. The total size is 192 bytes (3 × 64-byte cache lines).
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 #[derive(Debug, Clone, PartialEq)]
-#[repr(align(64))]
 pub struct ImageFingerprint {
     pub(crate) exact: [u8; 32],
     pub(crate) global_hash: u64,
@@ -122,14 +117,9 @@ impl ImageFingerprint {
 ///
 /// Provides enhanced similarity detection by combining results from multiple
 /// hash algorithms with weighted combination for improved accuracy.
-///
-/// # Cache Alignment
-/// This struct is cache-line aligned (64 bytes) for optimal performance.
-/// Total size is 640 bytes (10 × 64-byte cache lines).
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 #[derive(Debug, Clone, PartialEq)]
-#[repr(align(64))]
 pub struct MultiHashFingerprint {
     pub(crate) exact: [u8; 32],
     pub(crate) ahash: ImageFingerprint,
@@ -201,15 +191,26 @@ impl MultiHashFingerprint {
     /// for improved crop resistance. Block hashes are weighted at 60% and global
     /// hashes at 40% within each algorithm.
     ///
-    /// Returns a Similarity struct with combined score and component distances.
-    ///
-    /// Uses constant-time comparison to prevent timing attacks on exact match.
+    /// Uses the default block distance threshold of 32.
+    /// Use [`compare_with_threshold`](Self::compare_with_threshold) for custom thresholds.
+    #[must_use]
+    pub fn compare(&self, other: &MultiHashFingerprint) -> Similarity {
+        self.compare_with_threshold(other, 32)
+    }
+
+    /// Compares two multi-hash fingerprints with a custom block distance threshold.
     ///
     /// # Arguments
     /// * `other` - The fingerprint to compare against
+    /// * `block_threshold` - Maximum Hamming distance for a block to count as a match (0-64).
+    ///   Lower = stricter (fewer blocks qualify), higher = looser. Default is 32.
     #[must_use]
-    pub fn compare(&self, other: &MultiHashFingerprint) -> Similarity {
-        use crate::core::similarity::{compute_similarity, hamming_distance};
+    pub fn compare_with_threshold(
+        &self,
+        other: &MultiHashFingerprint,
+        block_threshold: u32,
+    ) -> Similarity {
+        use crate::core::similarity::{compute_similarity_with_threshold, hamming_distance};
         use subtle::ConstantTimeEq;
 
         let exact_match = self.exact.ct_eq(&other.exact).into();
@@ -224,9 +225,12 @@ impl MultiHashFingerprint {
         }
 
         // Compute per-algorithm similarities including block-level comparison
-        let ahash_sim = compute_similarity(&self.ahash, &other.ahash).score;
-        let phash_sim = compute_similarity(&self.phash, &other.phash).score;
-        let dhash_sim = compute_similarity(&self.dhash, &other.dhash).score;
+        let ahash_sim =
+            compute_similarity_with_threshold(&self.ahash, &other.ahash, block_threshold).score;
+        let phash_sim =
+            compute_similarity_with_threshold(&self.phash, &other.phash, block_threshold).score;
+        let dhash_sim =
+            compute_similarity_with_threshold(&self.dhash, &other.dhash, block_threshold).score;
 
         let weighted_score =
             ahash_sim * AHASH_WEIGHT + phash_sim * PHASH_WEIGHT + dhash_sim * DHASH_WEIGHT;
@@ -245,8 +249,6 @@ impl MultiHashFingerprint {
             + (phash_dist as f32 * PHASH_WEIGHT)
             + (dhash_dist as f32 * DHASH_WEIGHT)) as u32;
 
-        // Score is already in valid range due to hash_similarity returning [0, 1]
-        // and weights summing to 1.0, so clamping is only needed for floating-point errors
         Similarity {
             score: weighted_score.clamp(0.0, 1.0),
             exact_match: false,

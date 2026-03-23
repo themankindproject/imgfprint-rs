@@ -498,50 +498,13 @@ impl ImageFingerprinter {
     /// * `chunk_size` - Number of images to process per chunk
     /// * `callback` - Function called with each result as (id, Result<...>)
     #[cfg_attr(feature = "tracing", instrument(skip(images, callback), fields(chunk_size, image_count = images.len())))]
-    pub fn fingerprint_batch_chunked<S, F>(
-        images: &[(S, Vec<u8>)],
-        chunk_size: usize,
-        mut callback: F,
-    ) where
+    pub fn fingerprint_batch_chunked<S, F>(images: &[(S, Vec<u8>)], chunk_size: usize, callback: F)
+    where
         S: Send + Sync + Clone + 'static,
         F: FnMut(S, Result<MultiHashFingerprint, ImgFprintError>),
     {
-        let chunk_size = chunk_size.max(1);
-
-        #[cfg(feature = "tracing")]
-        let start = std::time::Instant::now();
-
-        #[cfg(feature = "tracing")]
-        tracing::debug!(
-            chunk_size,
-            image_count = images.len(),
-            "starting static batch_chunked"
-        );
-
-        #[cfg(feature = "tracing")]
-        let mut processed = 0usize;
-        #[cfg(feature = "tracing")]
-        let mut failed = 0usize;
-
-        for chunk in images.chunks(chunk_size) {
-            for (id, bytes) in chunk {
-                let result = Self::fingerprint(bytes);
-                #[cfg(feature = "tracing")]
-                {
-                    if result.is_err() {
-                        failed += 1;
-                    }
-                    processed += 1;
-                }
-                callback(id.clone(), result);
-            }
-        }
-
-        #[cfg(feature = "tracing")]
-        debug!(
-            duration_ms = start.elapsed().as_millis(),
-            processed, failed, "static batch_chunked completed"
-        );
+        let mut ctx = FingerprinterContext::new();
+        ctx.fingerprint_batch_chunked(images, chunk_size, callback);
     }
 }
 

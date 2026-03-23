@@ -208,7 +208,7 @@ impl Preprocessor {
 
         // SIMD-friendly grayscale conversion with better cache locality
         // Process in chunks to improve CPU pipeline efficiency
-        rgb_to_grayscale_simd(&rgb_bytes, &mut self.gray_buffer);
+        rgb_to_grayscale(&rgb_bytes, &mut self.gray_buffer);
 
         // Reclaim RGB buffer for reuse after grayscale conversion is complete
         self.dst_buffer = rgb_bytes;
@@ -226,16 +226,16 @@ impl Preprocessor {
     }
 }
 
-/// SIMD-optimized RGB to grayscale conversion.
+/// RGB to grayscale conversion using ITU-R BT.601 luma coefficients.
 ///
-/// Uses ITU-R BT.601 luma coefficients with integer arithmetic.
-/// Processes pixels in chunks for better CPU pipeline efficiency.
+/// Uses integer arithmetic and processes pixels in chunks for better
+/// CPU pipeline efficiency (ILP-friendly unrolling).
 ///
 /// # Arguments
 /// * `rgb` - RGB bytes (3 bytes per pixel, RGBRGB... format)
 /// * `gray` - Output grayscale buffer (1 byte per pixel)
 #[inline(always)]
-fn rgb_to_grayscale_simd(rgb: &[u8], gray: &mut [u8]) {
+fn rgb_to_grayscale(rgb: &[u8], gray: &mut [u8]) {
     debug_assert_eq!(gray.len(), rgb.len() / 3);
 
     // Process 4 pixels at a time for better instruction-level parallelism
@@ -413,10 +413,10 @@ mod tests {
     }
 
     #[test]
-    fn test_rgb_to_grayscale_simd_uniform() {
+    fn test_rgb_to_grayscale_uniform() {
         let rgb = vec![128u8; 36];
         let mut gray = vec![0u8; 12];
-        rgb_to_grayscale_simd(&rgb, &mut gray);
+        rgb_to_grayscale(&rgb, &mut gray);
 
         for &g in &gray {
             assert!(g > 0 && g < 255);
@@ -424,13 +424,13 @@ mod tests {
     }
 
     #[test]
-    fn test_rgb_to_grayscale_simd_red() {
+    fn test_rgb_to_grayscale_red() {
         let mut rgb = vec![0u8; 36];
         for i in 0..12 {
             rgb[i * 3] = 255;
         }
         let mut gray = vec![0u8; 12];
-        rgb_to_grayscale_simd(&rgb, &mut gray);
+        rgb_to_grayscale(&rgb, &mut gray);
 
         for &g in &gray {
             assert!(g > 0 && g < 255);
@@ -438,10 +438,10 @@ mod tests {
     }
 
     #[test]
-    fn test_rgb_to_grayscale_simd_remainder() {
+    fn test_rgb_to_grayscale_remainder() {
         let rgb = vec![100u8; 39];
         let mut gray = vec![0u8; 13];
-        rgb_to_grayscale_simd(&rgb, &mut gray);
+        rgb_to_grayscale(&rgb, &mut gray);
 
         assert_eq!(gray.len(), 13);
         for &g in &gray {
@@ -450,10 +450,10 @@ mod tests {
     }
 
     #[test]
-    fn test_rgb_to_grayscale_simd_black() {
+    fn test_rgb_to_grayscale_black() {
         let rgb = vec![0u8; 12];
         let mut gray = vec![0u8; 4];
-        rgb_to_grayscale_simd(&rgb, &mut gray);
+        rgb_to_grayscale(&rgb, &mut gray);
 
         for &g in &gray {
             assert_eq!(g, 0);
@@ -461,10 +461,10 @@ mod tests {
     }
 
     #[test]
-    fn test_rgb_to_grayscale_simd_white() {
+    fn test_rgb_to_grayscale_white() {
         let rgb = vec![255u8; 12];
         let mut gray = vec![0u8; 4];
-        rgb_to_grayscale_simd(&rgb, &mut gray);
+        rgb_to_grayscale(&rgb, &mut gray);
 
         for &g in &gray {
             assert_eq!(g, 255);

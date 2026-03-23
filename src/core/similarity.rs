@@ -1,6 +1,13 @@
 use crate::core::fingerprint::ImageFingerprint;
 use subtle::ConstantTimeEq;
 
+/// Default maximum Hamming distance for a block to be considered a valid match.
+///
+/// Blocks with distance above this threshold are excluded from the similarity
+/// calculation. This handles cropped images where some regions don't overlap.
+/// Lower values are stricter (fewer blocks qualify), higher values are looser.
+const BLOCK_DISTANCE_THRESHOLD: u32 = 32;
+
 /// Computes similarity from a Hamming distance.
 ///
 /// Returns a value from 0.0 (completely different, distance >= 64)
@@ -68,22 +75,36 @@ impl Similarity {
 /// - 40% weight on global perceptual hash similarity
 /// - 60% weight on block-level hash similarity (crop resistance)
 ///
-/// These weights were chosen empirically to balance overall image similarity
-/// (global hash) with regional matching (block hashes) for crop resistance.
-/// Block hashes receive higher weight because partial region matches are
-/// more reliable indicators of similarity than global structure alone.
-///
-/// Uses constant-time comparison to prevent timing attacks on exact match.
+/// Uses the default block distance threshold of 32.
+/// Use [`compute_similarity_with_threshold`] for custom thresholds.
 #[must_use]
 pub fn compute_similarity(a: &ImageFingerprint, b: &ImageFingerprint) -> Similarity {
+    compute_similarity_with_threshold(a, b, BLOCK_DISTANCE_THRESHOLD)
+}
+
+/// Computes similarity between two fingerprints with a custom block threshold.
+///
+/// # Arguments
+/// * `a` - First fingerprint
+/// * `b` - Second fingerprint
+/// * `block_threshold` - Maximum Hamming distance for a block to count as a match (0-64).
+///   Lower = stricter, higher = looser. Default is 32.
+///
+/// See [`compute_similarity`] for weight details.
+#[must_use]
+pub fn compute_similarity_with_threshold(
+    a: &ImageFingerprint,
+    b: &ImageFingerprint,
+    block_threshold: u32,
+) -> Similarity {
     let exact_match = a.exact.ct_eq(&b.exact).into();
 
     let global_distance = hamming_distance(a.global_hash, b.global_hash);
     let global_similarity = hash_similarity(global_distance);
-    let block_similarity = compute_block_similarity(&a.block_hashes, &b.block_hashes);
+    let block_similarity =
+        compute_block_similarity_with_threshold(&a.block_hashes, &b.block_hashes, block_threshold);
 
     // Weighted combination: 40% global + 60% block-level
-    // This weighting emphasizes crop resistance while maintaining overall similarity
     let combined_score = 0.4 * global_similarity + 0.6 * block_similarity;
 
     if exact_match {
@@ -104,19 +125,33 @@ pub fn compute_similarity(a: &ImageFingerprint, b: &ImageFingerprint) -> Similar
 /// Computes block-level similarity with crop resistance.
 ///
 /// Compares corresponding blocks from the 4x4 grid and filters out blocks
-/// with Hamming distance > 32. This threshold handles cropped images where
-/// some regions may not overlap between the two images.
-///
-/// For example, if image A is cropped to show only the top-left quadrant,
-/// blocks in the bottom-right of A won't match B, but the top-left blocks
-/// will still contribute to the similarity score.
+/// with Hamming distance above the default threshold (32).
+/// Use [`compute_block_similarity_with_threshold`] for custom thresholds.
+#[must_use]
+#[allow(dead_code)] // Public convenience wrapper, used via tests
 pub fn compute_block_similarity(a: &[u64; 16], b: &[u64; 16]) -> f32 {
+    compute_block_similarity_with_threshold(a, b, BLOCK_DISTANCE_THRESHOLD)
+}
+
+/// Computes block-level similarity with a custom distance threshold.
+///
+/// # Arguments
+/// * `a` - Block hashes from first image
+/// * `b` - Block hashes from second image
+/// * `max_distance` - Maximum Hamming distance for a block to be included.
+///   Lower values exclude more blocks (stricter matching).
+///   Higher values include more blocks (looser matching).
+pub fn compute_block_similarity_with_threshold(
+    a: &[u64; 16],
+    b: &[u64; 16],
+    max_distance: u32,
+) -> f32 {
     let mut total_similarity = 0.0f32;
     let mut valid_comparisons = 0u32;
 
     for i in 0..16 {
         let distance = hamming_distance(a[i], b[i]);
-        if distance <= 32 {
+        if distance <= max_distance {
             total_similarity += hash_similarity(distance);
             valid_comparisons += 1;
         }
