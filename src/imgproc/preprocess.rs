@@ -162,10 +162,9 @@ impl Preprocessor {
     ///
     /// Returns `ImgFprintError::ProcessingError` if resize or conversion fails.
     pub fn normalize(&mut self, image: &DynamicImage) -> Result<GrayImage, ImgFprintError> {
-        let oriented = apply_orientation(image);
-        let (src_w, src_h) = oriented.dimensions();
+        let (src_w, src_h) = image.dimensions();
 
-        let rgb_img = oriented.to_rgb8();
+        let rgb_img = image.to_rgb8();
         let src_data = rgb_img.into_raw();
 
         let src = Image::from_vec_u8(src_w, src_h, src_data, PixelType::U8x3)
@@ -285,17 +284,6 @@ fn rgb_to_grayscale_simd(rgb: &[u8], gray: &mut [u8]) {
         gray[chunks * 4 + i] =
             ((LUMA_COEFF_R * r + LUMA_COEFF_G * g + LUMA_COEFF_B * b) >> LUMA_SHIFT) as u8;
     }
-}
-
-/// Applies EXIF orientation metadata to the image.
-///
-/// Rotates/flips the image according to EXIF orientation tag to ensure
-/// the visual appearance matches the encoded pixel data. This is critical
-/// for consistent fingerprinting across different image sources.
-fn apply_orientation(image: &DynamicImage) -> std::borrow::Cow<'_, DynamicImage> {
-    // Skip EXIF orientation processing - modern image decoders handle this
-    // Returns Cow::Borrowed to avoid expensive clone
-    std::borrow::Cow::Borrowed(image)
 }
 
 /// Extracts center 32x32 region as normalized float buffer.
@@ -551,14 +539,6 @@ mod tests {
 
         assert!((blocks[0].iter().sum::<f32>() / (64.0 * 64.0)) > 0.4);
         assert!((blocks[15].iter().sum::<f32>() / (64.0 * 64.0)) < 0.1);
-    }
-
-    #[test]
-    fn test_apply_orientation_no_transform() {
-        let img = GrayImage::from_pixel(100, 100, Luma([128u8]));
-        let dynamic = DynamicImage::ImageLuma8(img);
-        let result = apply_orientation(&dynamic);
-        assert_eq!(result.dimensions(), (100, 100));
     }
 
     #[test]

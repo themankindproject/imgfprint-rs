@@ -343,12 +343,7 @@ pub fn semantic_similarity(a: &Embedding, b: &Embedding) -> Result<f32, ImgFprin
         });
     }
 
-    if !a_vec.iter().all(|x| x.is_finite()) || !b_vec.iter().all(|x| x.is_finite()) {
-        return Err(ImgFprintError::InvalidEmbedding(
-            "embedding contains non-finite values (NaN or infinity)".to_string(),
-        ));
-    }
-
+    // Note: Embedding::new() already validates finiteness, so no need to re-check here.
     // Compute dot product and norms in a single pass for better cache locality
     let mut dot_product: f32 = 0.0;
     let mut norm_first_sq: f32 = 0.0;

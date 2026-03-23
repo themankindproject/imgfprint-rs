@@ -1,21 +1,6 @@
 use crate::core::fingerprint::ImageFingerprint;
 use subtle::ConstantTimeEq;
 
-/// Pre-computed population count lookup table for 8-bit values.
-/// This provides faster Hamming distance computation than calling count_ones()
-/// for 64-bit values, especially in hot loops.
-const POPCOUNT_TABLE: [u8; 256] = compute_popcount_table();
-
-const fn compute_popcount_table() -> [u8; 256] {
-    let mut table = [0; 256];
-    let mut i = 0;
-    while i < 256 {
-        table[i] = (i as u8).count_ones() as u8;
-        i += 1;
-    }
-    table
-}
-
 /// Computes similarity from a Hamming distance.
 ///
 /// Returns a value from 0.0 (completely different, distance >= 64)
@@ -31,25 +16,14 @@ pub fn hash_similarity(distance: u32) -> f32 {
     }
 }
 
-/// Computes Hamming distance between two 64-bit hashes using lookup table.
+/// Computes Hamming distance between two 64-bit hashes.
 ///
-/// Uses a pre-computed population count table for faster computation
-/// than the built-in count_ones() on 64-bit values.
-///
-/// Note: On modern x86-64 CPUs with POPCNT instruction, `count_ones()`
-/// may be faster. Benchmark both approaches for your specific use case.
+/// Uses the hardware POPCNT instruction via `count_ones()`, which executes
+/// in a single cycle on modern x86-64 CPUs. This is faster than a byte-level
+/// lookup table approach which requires 8 memory lookups + 7 additions.
 #[inline(always)]
 pub fn hamming_distance(a: u64, b: u64) -> u32 {
-    let xor = a ^ b;
-    // Sum population count of each byte using lookup table
-    POPCOUNT_TABLE[xor as usize & 0xFF] as u32
-        + POPCOUNT_TABLE[(xor >> 8) as usize & 0xFF] as u32
-        + POPCOUNT_TABLE[(xor >> 16) as usize & 0xFF] as u32
-        + POPCOUNT_TABLE[(xor >> 24) as usize & 0xFF] as u32
-        + POPCOUNT_TABLE[(xor >> 32) as usize & 0xFF] as u32
-        + POPCOUNT_TABLE[(xor >> 40) as usize & 0xFF] as u32
-        + POPCOUNT_TABLE[(xor >> 48) as usize & 0xFF] as u32
-        + POPCOUNT_TABLE[(xor >> 56) as usize & 0xFF] as u32
+    (a ^ b).count_ones()
 }
 
 /// Similarity score between two image fingerprints.

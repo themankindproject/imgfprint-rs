@@ -31,6 +31,9 @@ use crate::error::ImgFprintError;
 use std::path::Path;
 use tract_onnx::prelude::*;
 
+type RunnableOnnxModel =
+    RunnableModel<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
+
 /// Configuration for the local embedding provider.
 #[derive(Debug, Clone)]
 pub struct LocalProviderConfig {
@@ -111,7 +114,7 @@ impl LocalProviderConfig {
 /// # }
 /// ```
 pub struct LocalProvider {
-    model: TypedModel,
+    model: RunnableOnnxModel,
     config: LocalProviderConfig,
 }
 
@@ -119,7 +122,7 @@ impl std::fmt::Debug for LocalProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LocalProvider")
             .field("config", &self.config)
-            .field("model", &"<TypedModel>")
+            .field("model", &"<RunnableModel>")
             .finish()
     }
 }
@@ -183,13 +186,7 @@ impl LocalProvider {
                 ImgFprintError::ProviderError(format!("Failed to make model runnable: {}", e))
             })?;
 
-        // Get the model type
-        let typed_model: TypedModel = model.model().clone();
-
-        Ok(Self {
-            model: typed_model,
-            config,
-        })
+        Ok(Self { model, config })
     }
 
     /// Creates a new LocalProvider from ONNX model bytes.
@@ -233,13 +230,7 @@ impl LocalProvider {
                 ImgFprintError::ProviderError(format!("Failed to make model runnable: {}", e))
             })?;
 
-        // Get the model type
-        let typed_model: TypedModel = model.model().clone();
-
-        Ok(Self {
-            model: typed_model,
-            config,
-        })
+        Ok(Self { model, config })
     }
 
     /// Returns the configuration of this provider.
@@ -311,15 +302,9 @@ impl EmbeddingProvider for LocalProvider {
         // Preprocess the image
         let input_tensor = self.preprocess_image(image)?;
 
-        // Create a runnable model for this inference
-        let runnable = self
+        // Run inference using cached model (no clone needed)
+        let output = self
             .model
-            .clone()
-            .into_runnable()
-            .map_err(|e| ImgFprintError::ProviderError(format!("Model error: {}", e)))?;
-
-        // Run inference
-        let output = runnable
             .run(tvec!(input_tensor.into()))
             .map_err(|e| ImgFprintError::ProviderError(format!("Inference failed: {}", e)))?;
 
