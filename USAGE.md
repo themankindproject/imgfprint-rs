@@ -30,7 +30,7 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-imgfprint = "0.3.2"
+imgfprint = "0.3.3"
 ```
 
 ### Basic Example (Multi-Algorithm)
@@ -197,12 +197,12 @@ println!("Distance: {}", sim.perceptual_distance); // 0-64
 ```rust
 pub fn fingerprint_batch<S>(
     images: &[(S, Vec<u8>)]
-) -> Vec<(S, Result<ImageFingerprint, ImgFprintError>)>
+) -> Vec<(S, Result<MultiHashFingerprint, ImgFprintError>)>
 where
     S: Send + Sync + Clone + 'static
 ```
 
-Processes multiple images in parallel (requires `parallel` feature).
+Processes multiple images in parallel (requires `parallel` feature). Uses per-thread context caching to minimize allocations across parallel workers.
 
 **Example:**
 ```rust
@@ -468,7 +468,9 @@ Checks if this fingerprint is similar to another within a threshold.
 
 **Parameters:**
 - `other`: Fingerprint to compare against
-- `threshold`: Similarity threshold 0.0 to 1.0 (default: 0.8)
+- `threshold`: Similarity threshold 0.0 to 1.0
+
+**Note:** Out-of-range or NaN thresholds are clamped to [0.0, 1.0] (returns `false` if clamped to 0.0). Panics in debug mode to help catch bugs during development.
 
 **Example:**
 ```rust
@@ -596,7 +598,9 @@ println!("Combined similarity: {:.2}", sim.score);
 pub fn is_similar(&self, other: &MultiHashFingerprint, threshold: f32) -> bool
 ```
 
-Checks if this fingerprint is similar to another within a threshold.
+Checks if this fingerprint is similar to another within a threshold using the weighted comparison score.
+
+**Note:** Out-of-range or NaN thresholds are clamped to [0.0, 1.0] (returns `false` if clamped to 0.0). Panics in debug mode to help catch bugs during development.
 
 **Example:**
 ```rust
@@ -809,7 +813,7 @@ With the `local-embedding` feature:
 
 ```toml
 [dependencies]
-imgfprint = { version = "0.3.2", features = ["local-embedding"] }
+imgfprint = { version = "0.3.3", features = ["local-embedding"] }
 ```
 
 ```rust
@@ -968,13 +972,13 @@ Configure the library for your needs:
 ```toml
 [dependencies]
 # Minimal build (no parallel processing)
-imgfprint = { version = "0.3.2", default-features = false }
+imgfprint = { version = "0.3.3", default-features = false }
 
 # Default (serialization + parallel processing)
-imgfprint = "0.3.2"
+imgfprint = "0.3.3"
 
 # With local ONNX inference
-imgfprint = { version = "0.3.2", features = ["local-embedding"] }
+imgfprint = { version = "0.3.3", features = ["local-embedding"] }
 ```
 
 ### Available Features
@@ -992,7 +996,7 @@ Enable the `tracing` feature to add performance instrumentation:
 
 ```toml
 [dependencies]
-imgfprint = { version = "0.3.2", features = ["tracing"] }
+imgfprint = { version = "0.3.3", features = ["tracing"] }
 ```
 
 ```rust

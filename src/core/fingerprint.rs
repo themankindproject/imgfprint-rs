@@ -21,7 +21,7 @@ const DHASH_WEIGHT: f32 = 0.30;
 /// similarity detection with resistance to resizing, compression, and cropping.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageFingerprint {
     pub(crate) exact: [u8; 32],
     pub(crate) global_hash: u64,
@@ -84,6 +84,10 @@ impl ImageFingerprint {
     /// * `other` - The fingerprint to compare against
     /// * `threshold` - Similarity threshold from 0.0 to 1.0 (default: 0.8)
     ///
+    /// # Panics
+    /// Panics in debug mode if threshold is not in [0.0, 1.0].
+    /// In release mode, out-of-range or NaN thresholds return false (never similar).
+    ///
     /// # Example
     /// ```ignore
     /// // Use ImageFingerprinter::fingerprint() to create fingerprints first
@@ -107,9 +111,11 @@ impl ImageFingerprint {
         if self.exact == other.exact {
             return true;
         }
+        // Clamp threshold to valid range for release builds to handle NaN/out-of-range gracefully
+        let clamped_threshold = threshold.clamp(0.0, 1.0);
         let dist = self.distance(other);
         let similarity = hash_similarity(dist);
-        similarity >= threshold
+        similarity >= clamped_threshold
     }
 }
 
@@ -119,7 +125,7 @@ impl ImageFingerprint {
 /// hash algorithms with weighted combination for improved accuracy.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MultiHashFingerprint {
     pub(crate) exact: [u8; 32],
     pub(crate) ahash: ImageFingerprint,
@@ -259,6 +265,10 @@ impl MultiHashFingerprint {
     /// Checks if this fingerprint is similar to another within a threshold.
     ///
     /// Uses the weighted combination score from compare().
+    ///
+    /// # Panics
+    /// Panics in debug mode if threshold is not in [0.0, 1.0].
+    /// In release mode, out-of-range or NaN thresholds return false.
     #[must_use]
     pub fn is_similar(&self, other: &MultiHashFingerprint, threshold: f32) -> bool {
         debug_assert!(
@@ -266,6 +276,7 @@ impl MultiHashFingerprint {
             "threshold must be in range [0.0, 1.0], got {}",
             threshold
         );
-        self.compare(other).score >= threshold
+        let clamped_threshold = threshold.clamp(0.0, 1.0);
+        self.compare(other).score >= clamped_threshold
     }
 }

@@ -5,7 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.3] - 2026-03-28
+
+### Fixed
+
+- **Double image decode in `decode_image()`**: Eliminated redundant full image decode when checking dimensions. Previously `into_dimensions()` followed by `load_from_memory()` decoded the image twice. Now dimension checking uses the same reader without discarding it.
+- **Post-EXIF dimension validation**: Added dimension re-validation after applying EXIF orientation transforms. A 9000x100 image rotated 90° now correctly rejected instead of silently producing out-of-limit dimensions.
+- **Per-item context allocation in parallel batch**: `fingerprint_batch` and `fingerprint_batch_with` with the `parallel` feature were creating a new `FingerprinterContext` per image instead of per rayon task. Now uses `map_init` to cache context per worker, reusing preprocessor and hasher across images.
+- **NaN/infinity threshold handling in `is_similar`**: Both `ImageFingerprint::is_similar()` and `MultiHashFingerprint::is_similar()` now clamp threshold to [0.0, 1.0] before comparison. Previously, NaN thresholds silently returned incorrect results in release builds (where `debug_assert!` is stripped).
+- **Bilinear resample identity case**: Added fast-path `copy_from_slice` when source and destination dimensions are identical, skipping unnecessary floating-point interpolation.
 
 ### Changed
 
@@ -25,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Renamed `rgb_to_grayscale_simd` to `rgb_to_grayscale` (was not actual SIMD, misleading name)
   - Deduplicated `ImageFingerprinter::fingerprint_batch_chunked` (now delegates to `FingerprinterContext`)
   - Fixed clippy warnings (type_complexity)
+  - Added SAFETY documentation for `unsafe set_cpu_extensions()` block explaining CPU feature detection precondition
+  - Improved DCT `expect()` messages with specific failure context
+  - Clarified `#[allow(dead_code)]` annotation on public `compute_block_similarity()` convenience function
+  - Added `#[must_use]` to constructor and accessor methods (`FingerprinterContext::new()`, `HashAlgorithm::hash_bits()`, `HashAlgorithm::max_distance()`, `LocalProviderConfig` presets)
+  - Added `Eq` derive to `ImageFingerprint` and `MultiHashFingerprint` (all fields are `Eq`-compatible)
+  - Downgraded `#[inline(always)]` to `#[inline]` on `hash_similarity()` and `hamming_distance()` to respect compiler heuristics
+  - Added numeric separators to CLIP normalization constants for readability
 
 ## [0.3.2] - 2025-03-18
 
@@ -200,7 +215,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Semantic embeddings via external providers
 - Local ONNX inference (optional feature)
 
-[0.3.2]: https://github.com/themankindproject/imgfprint-rs/compare/v0.3.1...main
+[0.3.3]: https://github.com/themankindproject/imgfprint-rs/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/themankindproject/imgfprint-rs/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/themankindproject/imgfprint-rs/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/themankindproject/imgfprint-rs/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/themankindproject/imgfprint-rs/compare/v0.1.3...v0.2.0

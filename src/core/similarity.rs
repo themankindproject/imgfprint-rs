@@ -14,7 +14,7 @@ const BLOCK_DISTANCE_THRESHOLD: u32 = 32;
 /// to 1.0 (identical, distance = 0).
 ///
 /// This is a shared utility used by both single and multi-hash comparison.
-#[inline(always)]
+#[inline]
 pub fn hash_similarity(distance: u32) -> f32 {
     if distance >= 64 {
         0.0
@@ -28,7 +28,7 @@ pub fn hash_similarity(distance: u32) -> f32 {
 /// Uses the hardware POPCNT instruction via `count_ones()`, which executes
 /// in a single cycle on modern x86-64 CPUs. This is faster than a byte-level
 /// lookup table approach which requires 8 memory lookups + 7 additions.
-#[inline(always)]
+#[inline]
 pub fn hamming_distance(a: u64, b: u64) -> u32 {
     (a ^ b).count_ones()
 }
@@ -39,6 +39,7 @@ pub fn hamming_distance(a: u64, b: u64) -> u32 {
 /// a robust measure of visual similarity.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(clippy::derive_partial_eq_without_eq)] // f32 field prevents Eq (NaN != NaN)
 pub struct Similarity {
     /// Similarity score from 0.0 (completely different) to 1.0 (identical).
     ///
@@ -128,7 +129,7 @@ pub fn compute_similarity_with_threshold(
 /// with Hamming distance above the default threshold (32).
 /// Use [`compute_block_similarity_with_threshold`] for custom thresholds.
 #[must_use]
-#[allow(dead_code)] // Public convenience wrapper, used via tests
+#[allow(dead_code)] // Public API convenience function - used by downstream consumers
 pub fn compute_block_similarity(a: &[u64; 16], b: &[u64; 16]) -> f32 {
     compute_block_similarity_with_threshold(a, b, BLOCK_DISTANCE_THRESHOLD)
 }

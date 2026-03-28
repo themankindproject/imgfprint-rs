@@ -83,6 +83,12 @@ pub fn bilinear_resample(
     dst_w: usize,
     dst_h: usize,
 ) {
+    // Fast path: identity resample (same dimensions) - just copy
+    if src_w == dst_w && src_h == dst_h {
+        dst.copy_from_slice(&src[..dst_w * dst_h]);
+        return;
+    }
+
     let x_ratio = src_w as f32 / dst_w as f32;
     let y_ratio = src_h as f32 / dst_h as f32;
 
@@ -138,6 +144,9 @@ impl Preprocessor {
         // Use cached CPU extensions detection
         let cpu_extensions = get_cpu_extensions();
         if cpu_extensions != CpuExtensions::None {
+            // SAFETY: get_cpu_extensions() only returns AVX2/SSE4.1/NEON after
+            // verifying the CPU supports them via is_x86_feature_detected! or
+            // target_arch checks. Using unsupported SIMD instructions would be UB.
             unsafe {
                 resizer.set_cpu_extensions(cpu_extensions);
             }

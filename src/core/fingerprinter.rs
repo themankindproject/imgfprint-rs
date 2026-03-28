@@ -36,6 +36,7 @@ impl Default for FingerprinterContext {
 
 impl FingerprinterContext {
     /// Creates a new fingerprinter context with cached resources.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             preprocessor: Preprocessor::new(),
@@ -389,6 +390,8 @@ impl ImageFingerprinter {
     /// Computes fingerprints for multiple images in batch.
     ///
     /// Processes each image independently and returns results in the same order.
+    /// When the `parallel` feature is enabled, uses per-thread context caching
+    /// to minimize allocations across parallel workers.
     #[cfg_attr(feature = "tracing", instrument(skip(images), fields(image_count = images.len())))]
     pub fn fingerprint_batch<S>(
         images: &[(S, Vec<u8>)],
@@ -405,10 +408,10 @@ impl ImageFingerprinter {
 
             let results = images
                 .par_iter()
-                .map(|(id, bytes)| {
-                    let mut ctx = FingerprinterContext::new();
-                    (id.clone(), ctx.fingerprint(bytes))
-                })
+                .map_init(
+                    || std::cell::RefCell::new(FingerprinterContext::new()),
+                    |ctx, (id, bytes)| (id.clone(), ctx.borrow_mut().fingerprint(bytes)),
+                )
                 .collect();
 
             #[cfg(feature = "tracing")]
@@ -455,10 +458,15 @@ impl ImageFingerprinter {
 
             let results = images
                 .par_iter()
-                .map(|(id, bytes)| {
-                    let mut ctx = FingerprinterContext::new();
-                    (id.clone(), ctx.fingerprint_with(bytes, algorithm))
-                })
+                .map_init(
+                    || std::cell::RefCell::new(FingerprinterContext::new()),
+                    |ctx, (id, bytes)| {
+                        (
+                            id.clone(),
+                            ctx.borrow_mut().fingerprint_with(bytes, algorithm),
+                        )
+                    },
+                )
                 .collect();
 
             #[cfg(feature = "tracing")]

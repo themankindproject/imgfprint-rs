@@ -58,8 +58,8 @@ impl Default for LocalProviderConfig {
         Self {
             input_size: 224,
             // CLIP normalization values
-            normalize_mean: [0.48145466, 0.4578275, 0.40821073],
-            normalize_std: [0.26862954, 0.261_302_6, 0.275_777_1],
+            normalize_mean: [0.481_454_66, 0.457_827_5, 0.408_210_73],
+            normalize_std: [0.268_629_54, 0.261_302_6, 0.275_777_1],
             normalize_output: true,
         }
     }
@@ -67,21 +67,23 @@ impl Default for LocalProviderConfig {
 
 impl LocalProviderConfig {
     /// Creates a configuration for CLIP ViT-B/32 models.
+    #[must_use]
     pub fn clip_vit_base_patch32() -> Self {
         Self {
             input_size: 224,
-            normalize_mean: [0.48145466, 0.4578275, 0.40821073],
-            normalize_std: [0.26862954, 0.261_302_6, 0.275_777_1],
+            normalize_mean: [0.481_454_66, 0.457_827_5, 0.408_210_73],
+            normalize_std: [0.268_629_54, 0.261_302_6, 0.275_777_1],
             normalize_output: true,
         }
     }
 
     /// Creates a configuration for CLIP ViT-L/14 models.
+    #[must_use]
     pub fn clip_vit_large_patch14() -> Self {
         Self {
             input_size: 336,
-            normalize_mean: [0.48145466, 0.4578275, 0.40821073],
-            normalize_std: [0.26862954, 0.261_302_6, 0.275_777_1],
+            normalize_mean: [0.481_454_66, 0.457_827_5, 0.408_210_73],
+            normalize_std: [0.268_629_54, 0.261_302_6, 0.275_777_1],
             normalize_output: true,
         }
     }

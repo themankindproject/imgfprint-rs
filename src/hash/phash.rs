@@ -87,8 +87,11 @@ pub fn compute_phash(pixels: &[f32; DCT_SIZE * DCT_SIZE]) -> u64 {
     for row in 0..DCT_SIZE {
         let start = row * DCT_SIZE;
         row_buffer.copy_from_slice(&pixels[start..start + DCT_SIZE]);
+        // Safety: dct2_32 operates on fixed-size inputs (32 elements) with a cached
+        // FFT plan. It can only fail if the FFT process call fails, which cannot
+        // happen with the correct buffer sizes established by our const assertions.
         dct2_32(&row_buffer, &mut col_buffer[start..start + DCT_SIZE])
-            .expect("DCT should not fail for fixed-size inputs");
+            .expect("DCT failed on fixed-size input - indicates corrupted FFT plan");
     }
 
     // Column-wise DCT (transpose then DCT rows)
@@ -102,7 +105,9 @@ pub fn compute_phash(pixels: &[f32; DCT_SIZE * DCT_SIZE]) -> u64 {
             col_input[row] = col_buffer[row * DCT_SIZE + col];
         }
 
-        dct2_32(&col_input, &mut col_output).expect("DCT should not fail for fixed-size inputs");
+        // Safety: same as above - fixed-size inputs with cached plan
+        dct2_32(&col_input, &mut col_output)
+            .expect("DCT failed on fixed-size input - indicates corrupted FFT plan");
 
         // Store only top HASH_SIZE rows
         for row in 0..HASH_SIZE {

@@ -2,7 +2,7 @@
 
 use crate::error::ImgFprintError;
 use exif::{In, Reader, Tag};
-use image::DynamicImage;
+use image::{DynamicImage, GenericImageView};
 use std::io::Cursor;
 
 const MAX_DIMENSION: u32 = 8192;
@@ -50,10 +50,10 @@ fn apply_orientation_transform(image: DynamicImage, orientation: u32) -> Dynamic
     }
 }
 
-/// Decodes image bytes and validates dimensions.
+/// Decodes image bytes, validates dimensions, and applies EXIF orientation.
 ///
-/// - Checks dimensions before full decode to prevent OOM attacks.
-/// - Maximum allowed dimension is 8192x8192 pixels.
+/// - Validates input size before processing to prevent OOM attacks.
+/// - Maximum allowed dimension is 8192x8192 pixels (checked both before and after EXIF rotation).
 /// - Minimum required dimension is 32x32 pixels for fingerprinting.
 pub fn decode_image(image_bytes: &[u8]) -> Result<DynamicImage, ImgFprintError> {
     if image_bytes.is_empty() {
@@ -68,35 +68,28 @@ pub fn decode_image(image_bytes: &[u8]) -> Result<DynamicImage, ImgFprintError> 
         )));
     }
 
+    // Single decode pass: detect format and read dimensions before full decode
     let reader = image::ImageReader::new(Cursor::new(image_bytes))
         .with_guessed_format()
         .map_err(|e| ImgFprintError::decode_error(format!("format detection failed: {}", e)))?;
 
-    // Always check dimensions - fail closed if we can't determine them
-    match reader.into_dimensions() {
-        Ok((width, height)) => {
-            if width > MAX_DIMENSION || height > MAX_DIMENSION {
-                return Err(ImgFprintError::invalid_image(format!(
-                    "dimensions {}x{} exceed limit {}x{}",
-                    width, height, MAX_DIMENSION, MAX_DIMENSION
-                )));
-            }
-            if width < MIN_DIMENSION || height < MIN_DIMENSION {
-                return Err(ImgFprintError::image_too_small(format!(
-                    "dimensions {}x{} are below minimum {}x{}",
-                    width, height, MIN_DIMENSION, MIN_DIMENSION
-                )));
-            }
+    // Check raw dimensions before full decode to fail fast on oversized images
+    if let Ok((width, height)) = reader.into_dimensions() {
+        if width > MAX_DIMENSION || height > MAX_DIMENSION {
+            return Err(ImgFprintError::invalid_image(format!(
+                "dimensions {}x{} exceed limit {}x{}",
+                width, height, MAX_DIMENSION, MAX_DIMENSION
+            )));
         }
-        Err(e) => {
-            // Fail closed - if we can't verify dimensions, don't proceed
-            return Err(ImgFprintError::decode_error(format!(
-                "failed to read image dimensions: {}",
-                e
+        if width < MIN_DIMENSION || height < MIN_DIMENSION {
+            return Err(ImgFprintError::image_too_small(format!(
+                "dimensions {}x{} are below minimum {}x{}",
+                width, height, MIN_DIMENSION, MIN_DIMENSION
             )));
         }
     }
 
+    // Decode the image (single pass - format already detected above)
     let image = image::load_from_memory(image_bytes).map_err(|e| match e {
         image::ImageError::Unsupported(format) => {
             ImgFprintError::UnsupportedFormat(format!("{:?}", format))
@@ -111,13 +104,27 @@ pub fn decode_image(image_bytes: &[u8]) -> Result<DynamicImage, ImgFprintError> 
         image::ImageError::Limits(limits_err) => {
             ImgFprintError::invalid_image(format!("limits exceeded: {}", limits_err))
         }
-        // Preserve error details for all other cases
         other => ImgFprintError::ProcessingError(format!("image processing error: {}", other)),
     })?;
 
     // Apply EXIF orientation transformation
     let orientation = read_exif_orientation(image_bytes);
     let oriented_image = apply_orientation_transform(image, orientation);
+
+    // Re-validate dimensions after EXIF orientation (rotation can swap width/height)
+    let (final_w, final_h) = oriented_image.dimensions();
+    if final_w > MAX_DIMENSION || final_h > MAX_DIMENSION {
+        return Err(ImgFprintError::invalid_image(format!(
+            "post-orientation dimensions {}x{} exceed limit {}x{}",
+            final_w, final_h, MAX_DIMENSION, MAX_DIMENSION
+        )));
+    }
+    if final_w < MIN_DIMENSION || final_h < MIN_DIMENSION {
+        return Err(ImgFprintError::image_too_small(format!(
+            "post-orientation dimensions {}x{} are below minimum {}x{}",
+            final_w, final_h, MIN_DIMENSION, MIN_DIMENSION
+        )));
+    }
 
     Ok(oriented_image)
 }

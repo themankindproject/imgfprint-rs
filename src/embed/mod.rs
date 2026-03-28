@@ -65,6 +65,7 @@ pub use local::{LocalProvider, LocalProviderConfig};
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::derive_partial_eq_without_eq)] // Vec<f32> field prevents Eq (NaN != NaN)
 pub struct Embedding {
     vector: Vec<f32>,
     /// Optional model identifier to prevent comparing embeddings from different models.

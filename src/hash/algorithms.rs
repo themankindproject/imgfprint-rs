@@ -30,6 +30,7 @@ pub enum HashAlgorithm {
 
 impl HashAlgorithm {
     /// Returns the bit length of hashes produced by this algorithm.
+    #[must_use]
     pub const fn hash_bits(&self) -> u32 {
         match self {
             HashAlgorithm::AHash => 64,
@@ -39,6 +40,7 @@ impl HashAlgorithm {
     }
 
     /// Returns the maximum Hamming distance for this algorithm.
+    #[must_use]
     pub const fn max_distance(&self) -> u32 {
         self.hash_bits()
     }
