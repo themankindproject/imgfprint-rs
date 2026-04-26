@@ -21,7 +21,7 @@ const DHASH_WEIGHT: f32 = 0.30;
 /// similarity detection with resistance to resizing, compression, and cropping.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ImageFingerprint {
     pub(crate) exact: [u8; 32],
     pub(crate) global_hash: u64,
@@ -125,7 +125,7 @@ impl ImageFingerprint {
 /// hash algorithms with weighted combination for improved accuracy.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MultiHashFingerprint {
     pub(crate) exact: [u8; 32],
     pub(crate) ahash: ImageFingerprint,

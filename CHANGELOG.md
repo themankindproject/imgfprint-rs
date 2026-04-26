@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`Hash` derive on fingerprint types**: `ImageFingerprint` and `MultiHashFingerprint` now derive `Hash`, enabling their use as `HashMap` / `HashSet` keys for deduplication workflows. All fields are stack-allocated integer arrays, so the derive is a pure structural addition with no runtime cost.
+- **`fingerprint_path` convenience methods**: New methods on both `ImageFingerprinter` (static) and `FingerprinterContext` accept an `AsRef<Path>` and handle the file read internally. Variants:
+  - `ImageFingerprinter::fingerprint_path(path)` — multi-algorithm
+  - `ImageFingerprinter::fingerprint_path_with(path, algorithm)` — single-algorithm
+  - `FingerprinterContext::fingerprint_path(&mut self, path)` — multi-algorithm with buffer reuse
+  - `FingerprinterContext::fingerprint_path_with(&mut self, path, algorithm)` — single-algorithm with buffer reuse
+
+  File size is validated via `metadata().len()` against the existing 50 MB `MAX_INPUT_BYTES` cap *before* any read happens, so oversized files are rejected without being pulled into memory.
+
+- **`ImgFprintError::IoError` variant**: New error variant for I/O failures (missing files, unreadable paths, oversized inputs). Includes a `From<std::io::Error>` impl. Backwards-compatible because `ImgFprintError` is `#[non_exhaustive]`.
+
 ## [0.3.3] - 2026-03-28
 
 ### Fixed
@@ -215,6 +230,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Semantic embeddings via external providers
 - Local ONNX inference (optional feature)
 
+[Unreleased]: https://github.com/themankindproject/imgfprint-rs/compare/v0.3.3...HEAD
 [0.3.3]: https://github.com/themankindproject/imgfprint-rs/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/themankindproject/imgfprint-rs/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/themankindproject/imgfprint-rs/compare/v0.3.0...v0.3.1

@@ -10,7 +10,7 @@ const MIN_DIMENSION: u32 = 32;
 
 /// Maximum input size: 50MB - prevents memory exhaustion from maliciously large inputs.
 /// This limit prevents OOM attacks while still allowing typical high-res images.
-const MAX_INPUT_BYTES: usize = 50 * 1024 * 1024;
+pub(crate) const MAX_INPUT_BYTES: usize = 50 * 1024 * 1024;
 
 /// Reads EXIF orientation from image bytes.
 /// Returns orientation value (1-8) or 1 if no EXIF data found.

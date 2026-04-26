@@ -5,10 +5,26 @@ use crate::hash::ahash::{compute_ahash, compute_ahash_from_64x64};
 use crate::hash::algorithms::HashAlgorithm;
 use crate::hash::dhash::{compute_dhash, compute_dhash_from_64x64};
 use crate::hash::phash::{compute_phash, compute_phash_from_64x64};
-use crate::imgproc::decode::decode_image;
+use crate::imgproc::decode::{decode_image, MAX_INPUT_BYTES};
 use crate::imgproc::preprocess::{extract_blocks, extract_global_region, Preprocessor};
 use blake3::Hasher;
 use std::cell::RefCell;
+use std::path::Path;
+
+// Reads a file from disk into memory, rejecting inputs larger than the
+// 50 MB cap before any read happens. Keeps oversized files from being
+// pulled into RAM just to be rejected by `decode_image`.
+fn read_image_file(path: &Path) -> Result<Vec<u8>, ImgFprintError> {
+    let metadata = std::fs::metadata(path)?;
+    if metadata.len() > MAX_INPUT_BYTES as u64 {
+        return Err(ImgFprintError::IoError(format!(
+            "file size {} bytes exceeds maximum {} bytes",
+            metadata.len(),
+            MAX_INPUT_BYTES
+        )));
+    }
+    std::fs::read(path).map_err(Into::into)
+}
 
 // Module-level shared thread-local context to avoid duplication
 thread_local! {
@@ -62,6 +78,38 @@ impl FingerprinterContext {
             "fingerprint completed"
         );
         result
+    }
+
+    /// Reads an image from disk and computes its multi-algorithm fingerprint.
+    ///
+    /// Convenience wrapper around [`fingerprint`](Self::fingerprint) that handles
+    /// the file read. Files larger than 50 MB are rejected before any read happens.
+    ///
+    /// # Errors
+    ///
+    /// - [`ImgFprintError::IoError`] if the file cannot be opened, read, or exceeds 50 MB.
+    /// - All errors documented on [`fingerprint`](Self::fingerprint).
+    pub fn fingerprint_path<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+    ) -> Result<MultiHashFingerprint, ImgFprintError> {
+        let bytes = read_image_file(path.as_ref())?;
+        self.fingerprint(&bytes)
+    }
+
+    /// Reads an image from disk and computes a single-algorithm fingerprint.
+    ///
+    /// # Errors
+    ///
+    /// - [`ImgFprintError::IoError`] if the file cannot be opened, read, or exceeds 50 MB.
+    /// - All errors documented on [`fingerprint_with`](Self::fingerprint_with).
+    pub fn fingerprint_path_with<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        algorithm: HashAlgorithm,
+    ) -> Result<ImageFingerprint, ImgFprintError> {
+        let bytes = read_image_file(path.as_ref())?;
+        self.fingerprint_with(&bytes, algorithm)
     }
 
     /// Computes a single perceptual hash using the specified algorithm.
@@ -332,6 +380,36 @@ impl ImageFingerprinter {
         );
 
         result
+    }
+
+    /// Reads an image from disk and computes its multi-algorithm fingerprint.
+    ///
+    /// Convenience wrapper around [`fingerprint`](Self::fingerprint) that handles
+    /// the file read. Files larger than 50 MB are rejected before any read happens.
+    ///
+    /// # Errors
+    ///
+    /// - [`ImgFprintError::IoError`] if the file cannot be opened, read, or exceeds 50 MB.
+    /// - All errors documented on [`fingerprint`](Self::fingerprint).
+    pub fn fingerprint_path<P: AsRef<Path>>(
+        path: P,
+    ) -> Result<MultiHashFingerprint, ImgFprintError> {
+        let bytes = read_image_file(path.as_ref())?;
+        Self::fingerprint(&bytes)
+    }
+
+    /// Reads an image from disk and computes a single-algorithm fingerprint.
+    ///
+    /// # Errors
+    ///
+    /// - [`ImgFprintError::IoError`] if the file cannot be opened, read, or exceeds 50 MB.
+    /// - All errors documented on [`fingerprint_with`](Self::fingerprint_with).
+    pub fn fingerprint_path_with<P: AsRef<Path>>(
+        path: P,
+        algorithm: HashAlgorithm,
+    ) -> Result<ImageFingerprint, ImgFprintError> {
+        let bytes = read_image_file(path.as_ref())?;
+        Self::fingerprint_with(&bytes, algorithm)
     }
 
     /// Computes a single perceptual hash using the specified algorithm.
@@ -830,5 +908,97 @@ mod tests {
 
         let sim = ImageFingerprinter::compare(&fp1, &fp2);
         assert!(sim.score >= 0.0 && sim.score <= 1.0);
+    }
+
+    #[test]
+    fn test_fingerprint_path_static() {
+        let img = create_test_image(64, 64);
+        let dir = std::env::temp_dir();
+        let path = dir.join("imgfprint_test_path_static.png");
+        std::fs::write(&path, &img).unwrap();
+
+        let from_path = ImageFingerprinter::fingerprint_path(&path).unwrap();
+        let from_bytes = ImageFingerprinter::fingerprint(&img).unwrap();
+        assert_eq!(from_path, from_bytes);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_fingerprint_path_with_static() {
+        let img = create_test_image(64, 64);
+        let dir = std::env::temp_dir();
+        let path = dir.join("imgfprint_test_path_with_static.png");
+        std::fs::write(&path, &img).unwrap();
+
+        let from_path =
+            ImageFingerprinter::fingerprint_path_with(&path, HashAlgorithm::PHash).unwrap();
+        let from_bytes = ImageFingerprinter::fingerprint_with(&img, HashAlgorithm::PHash).unwrap();
+        assert_eq!(from_path, from_bytes);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_fingerprint_path_context() {
+        let img = create_test_image(64, 64);
+        let dir = std::env::temp_dir();
+        let path = dir.join("imgfprint_test_path_ctx.png");
+        std::fs::write(&path, &img).unwrap();
+
+        let mut ctx = FingerprinterContext::new();
+        let fp1 = ctx.fingerprint_path(&path).unwrap();
+        let fp2 = ctx.fingerprint(&img).unwrap();
+        assert_eq!(fp1, fp2);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_fingerprint_path_missing_file() {
+        let path = std::env::temp_dir().join("imgfprint_does_not_exist_xyzzy.png");
+        let err = ImageFingerprinter::fingerprint_path(&path).unwrap_err();
+        assert!(matches!(err, ImgFprintError::IoError(_)), "got: {:?}", err);
+    }
+
+    #[test]
+    fn test_fingerprint_path_oversized_file() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("imgfprint_test_oversized.bin");
+        // Allocate an empty file but report a size > 50 MB via sparse-write.
+        // Truncate to MAX_INPUT_BYTES + 1 without actually allocating disk.
+        let f = std::fs::File::create(&path).unwrap();
+        f.set_len((MAX_INPUT_BYTES as u64) + 1).unwrap();
+        drop(f);
+
+        let err = ImageFingerprinter::fingerprint_path(&path).unwrap_err();
+        assert!(matches!(err, ImgFprintError::IoError(_)), "got: {:?}", err);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_fingerprint_in_hashset() {
+        // The whole point of deriving Hash: fingerprints must be HashSet-able.
+        use std::collections::HashSet;
+
+        let img1 = create_test_image(64, 64);
+        let img2 = create_test_image(80, 80);
+
+        let fp1 = ImageFingerprinter::fingerprint(&img1).unwrap();
+        let fp1_again = ImageFingerprinter::fingerprint(&img1).unwrap();
+        let fp2 = ImageFingerprinter::fingerprint(&img2).unwrap();
+
+        let mut set = HashSet::new();
+        set.insert(fp1);
+        set.insert(fp1_again);
+        set.insert(fp2);
+        assert_eq!(set.len(), 2);
+
+        let mut single_set = HashSet::new();
+        let single = ImageFingerprinter::fingerprint_with(&img1, HashAlgorithm::DHash).unwrap();
+        single_set.insert(single.clone());
+        single_set.insert(single);
+        assert_eq!(single_set.len(), 1);
     }
 }

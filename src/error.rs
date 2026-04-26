@@ -94,6 +94,22 @@ pub enum ImgFprintError {
     /// - Calling [`semantic_similarity`](crate::embed::semantic_similarity) with invalid embeddings
     #[error("invalid embedding: {0}")]
     InvalidEmbedding(String),
+
+    /// I/O error reading the image source (file open/read failures).
+    ///
+    /// ## Errors
+    /// This error occurs when:
+    /// - The path passed to [`fingerprint_path`](crate::ImageFingerprinter::fingerprint_path) does not exist or is unreadable
+    /// - File metadata reports a size larger than the 50 MB input limit
+    /// - The underlying read fails partway through
+    #[error("io error: {0}")]
+    IoError(String),
+}
+
+impl From<std::io::Error> for ImgFprintError {
+    fn from(err: std::io::Error) -> Self {
+        Self::IoError(err.to_string())
+    }
 }
 
 impl ImgFprintError {
