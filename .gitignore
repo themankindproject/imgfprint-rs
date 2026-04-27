@@ -25,3 +25,7 @@ fuzz/artifacts
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 .recon/
+
+# Local Claude/MCP config
+.mcp.json
+CLAUDE.md
