@@ -98,6 +98,23 @@ pub fn compute_similarity_with_threshold(
     b: &ImageFingerprint,
     block_threshold: u32,
 ) -> Similarity {
+    compute_similarity_with_weights(a, b, 0.4, 0.6, block_threshold)
+}
+
+/// Computes similarity between two fingerprints with custom global/block
+/// weights and a block-distance threshold.
+///
+/// The combined score is `global_weight * global_similarity + block_weight * block_similarity`,
+/// clamped to `[0.0, 1.0]`. The default helpers ([`compute_similarity`],
+/// [`compute_similarity_with_threshold`]) use `0.4` / `0.6`.
+#[must_use]
+pub fn compute_similarity_with_weights(
+    a: &ImageFingerprint,
+    b: &ImageFingerprint,
+    global_weight: f32,
+    block_weight: f32,
+    block_threshold: u32,
+) -> Similarity {
     let exact_match = a.exact.ct_eq(&b.exact).into();
 
     let global_distance = hamming_distance(a.global_hash, b.global_hash);
@@ -105,8 +122,8 @@ pub fn compute_similarity_with_threshold(
     let block_similarity =
         compute_block_similarity_with_threshold(&a.block_hashes, &b.block_hashes, block_threshold);
 
-    // Weighted combination: 40% global + 60% block-level
-    let combined_score = 0.4 * global_similarity + 0.6 * block_similarity;
+    let combined_score =
+        (global_weight * global_similarity + block_weight * block_similarity).clamp(0.0, 1.0);
 
     if exact_match {
         Similarity {

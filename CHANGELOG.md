@@ -7,18 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-27
+
 ### Added
 
+- **`MultiHashConfig` for fully tunable similarity scoring**: Lets integrators (UCFP, downstream pipelines) shift trade-offs without forking the crate. Knobs:
+  - Inter-algorithm weights: `ahash_weight`, `phash_weight`, `dhash_weight` (defaults 0.10 / 0.60 / 0.30 reproduce the previous hardcoded blend)
+  - Intra-algorithm weights: `global_weight`, `block_weight` (defaults 0.40 / 0.60)
+  - `block_distance_threshold` (default 32 of 64)
+
+  Setting any algorithm weight to `0.0` removes it from the score — covers the "skip this hash" use case without restructuring `MultiHashFingerprint`. Score is clamped to `[0.0, 1.0]`.
+
+  New API: `MultiHashFingerprint::compare_with_config(&self, other, &MultiHashConfig)`. Existing `compare()` and `compare_with_threshold()` are preserved as defaulted wrappers — no behavior change for existing callers. `DEFAULT_*_WEIGHT` and `DEFAULT_BLOCK_DISTANCE_THRESHOLD` constants are re-exported.
+
+- **`PreprocessConfig` for tunable decode-time guards**: Replaces the hardcoded `MAX_INPUT_BYTES` (50 MiB) / `MAX_DIMENSION` (8192) / `MIN_DIMENSION` (32) constants. Tighten on untrusted ingest paths, widen for trusted batch jobs.
+
+  New APIs accept `&PreprocessConfig` on both the bytes and the path entry points:
+  - `decode_image_with_config(bytes, &cfg)` — also re-exported at crate root
+  - `ImageFingerprinter::fingerprint_with_preprocess(bytes, &cfg)`
+  - `ImageFingerprinter::fingerprint_path_with_preprocess(path, &cfg)`
+  - `FingerprinterContext::fingerprint_with_preprocess(&mut self, bytes, &cfg)`
+  - `FingerprinterContext::fingerprint_path_with_preprocess(&mut self, path, &cfg)`
+  - `FingerprinterContext::fingerprint_with_algorithm_and_preprocess(&mut self, bytes, algo, &cfg)`
+
+  The same config gates **both** the pre-read file-size guard and the decode-time dimension/byte guards, so the tightened limits aren't silently bypassed via the path API. `DEFAULT_MAX_INPUT_BYTES`, `DEFAULT_MAX_DIMENSION`, `DEFAULT_MIN_DIMENSION` constants are re-exported.
+
+- **`compute_similarity_with_weights`**: New public function in `core::similarity` exposing the global/block weight split for callers that work with raw `ImageFingerprint`s.
+
 - **`Hash` derive on fingerprint types**: `ImageFingerprint` and `MultiHashFingerprint` now derive `Hash`, enabling their use as `HashMap` / `HashSet` keys for deduplication workflows. All fields are stack-allocated integer arrays, so the derive is a pure structural addition with no runtime cost.
+
 - **`fingerprint_path` convenience methods**: New methods on both `ImageFingerprinter` (static) and `FingerprinterContext` accept an `AsRef<Path>` and handle the file read internally. Variants:
   - `ImageFingerprinter::fingerprint_path(path)` — multi-algorithm
   - `ImageFingerprinter::fingerprint_path_with(path, algorithm)` — single-algorithm
   - `FingerprinterContext::fingerprint_path(&mut self, path)` — multi-algorithm with buffer reuse
   - `FingerprinterContext::fingerprint_path_with(&mut self, path, algorithm)` — single-algorithm with buffer reuse
 
-  File size is validated via `metadata().len()` against the existing 50 MB `MAX_INPUT_BYTES` cap *before* any read happens, so oversized files are rejected without being pulled into memory.
+  File size is validated via `metadata().len()` against the configured `max_input_bytes` *before* any read happens, so oversized files are rejected without being pulled into memory.
 
 - **`ImgFprintError::IoError` variant**: New error variant for I/O failures (missing files, unreadable paths, oversized inputs). Includes a `From<std::io::Error>` impl. Backwards-compatible because `ImgFprintError` is `#[non_exhaustive]`.
+
+### Changed
+
+- **`compare_with_threshold` is now a wrapper over `compare_with_config`** — same scores, same defaults, simpler internals.
+
+### Removed
+
+- Internal `MAX_INPUT_BYTES`, `MAX_DIMENSION`, `MIN_DIMENSION` constants in `imgproc::decode`. Their `DEFAULT_*` public successors carry the same values; behavior is unchanged for callers who never imported the privates.
+
+### Notes for UCFP integrators
+
+Per-algorithm DCT/grid/hash-bit reconfiguration (different `dct_size`, `block_grid`, `hash_bits`) is **not** in 0.4.0 — those would require turning the static `[f32; 32*32]` and `[[f32; 64*64]; 16]` buffers into dynamically-sized vectors through every hash function and the preprocessor. That's a 0.5.0 surgery.
 
 ## [0.3.3] - 2026-03-28
 
@@ -230,7 +268,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Semantic embeddings via external providers
 - Local ONNX inference (optional feature)
 
-[Unreleased]: https://github.com/themankindproject/imgfprint-rs/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/themankindproject/imgfprint-rs/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/themankindproject/imgfprint-rs/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/themankindproject/imgfprint-rs/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/themankindproject/imgfprint-rs/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/themankindproject/imgfprint-rs/compare/v0.3.0...v0.3.1

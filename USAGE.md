@@ -30,7 +30,7 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-imgfprint = "0.3.3"
+imgfprint = "0.4.0"
 ```
 
 ### Basic Example (Multi-Algorithm)
@@ -49,7 +49,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fp1 = ImageFingerprinter::fingerprint(&img1)?;
     let fp2 = ImageFingerprinter::fingerprint(&img2)?;
     
-    // Compare using weighted combination (10% AHash, 60% PHash, 30% DHash)
+    // Compare using default weighted combination (10% AHash, 60% PHash, 30% DHash).
+    // For per-deployment tuning use `fp1.compare_with_config(&fp2, &cfg)` —
+    // see the Configurability section below.
     let sim = fp1.compare(&fp2);
     
     println!("Similarity: {:.2}", sim.score);
@@ -571,16 +573,16 @@ pub fn compare(&self, other: &MultiHashFingerprint) -> Similarity
 
 Compares two multi-hash fingerprints using weighted combination with block-level similarity for crop resistance.
 
-**Algorithm Weights:**
+**Default Algorithm Weights** (override with `MultiHashConfig`):
 - **10%** AHash similarity (average hash, fastest)
-- **60%** PHash similarity (DCT-based, robust to compression)  
+- **60%** PHash similarity (DCT-based, robust to compression)
 - **30%** DHash similarity (gradient-based, good for structural changes)
 
-**Per-Algorithm Composition:**
+**Default Per-Algorithm Composition** (override with `global_weight` / `block_weight`):
 - **40%** global hash similarity (overall structure)
 - **60%** block-level similarity (4x4 grid, crop resistance)
 
-This provides superior crop resistance compared to global-only comparison.
+This provides superior crop resistance compared to global-only comparison. See `compare_with_config()` below to retune any of these weights without forking the crate.
 
 **Example:**
 ```rust
@@ -591,6 +593,43 @@ let multi2 = ImageFingerprinter::fingerprint(&img2)?;
 let sim = multi1.compare(&multi2);
 println!("Combined similarity: {:.2}", sim.score);
 ```
+
+##### `compare_with_config()`
+
+```rust
+pub fn compare_with_config(
+    &self,
+    other: &MultiHashFingerprint,
+    config: &MultiHashConfig,
+) -> Similarity
+```
+
+Tunable variant of `compare()`. All six weights and the block distance threshold are integrator-controlled — defaults reproduce `compare()` exactly. Setting any algorithm weight to `0.0` removes it from the score (no need to skip the hash at compute time).
+
+```rust
+use imgfprint::MultiHashConfig;
+
+// PHash-only scoring
+let cfg = MultiHashConfig {
+    ahash_weight: 0.0,
+    phash_weight: 1.0,
+    dhash_weight: 0.0,
+    ..MultiHashConfig::default()
+};
+let sim = multi1.compare_with_config(&multi2, &cfg);
+```
+
+##### `compare_with_threshold()`
+
+```rust
+pub fn compare_with_threshold(
+    &self,
+    other: &MultiHashFingerprint,
+    block_threshold: u32,
+) -> Similarity
+```
+
+Convenience wrapper for the common case of overriding only `block_distance_threshold`. Equivalent to `compare_with_config` with that one field changed.
 
 ##### `is_similar()`
 
@@ -813,7 +852,7 @@ With the `local-embedding` feature:
 
 ```toml
 [dependencies]
-imgfprint = { version = "0.3.3", features = ["local-embedding"] }
+imgfprint = { version = "0.4.0", features = ["local-embedding"] }
 ```
 
 ```rust
@@ -972,13 +1011,13 @@ Configure the library for your needs:
 ```toml
 [dependencies]
 # Minimal build (no parallel processing)
-imgfprint = { version = "0.3.3", default-features = false }
+imgfprint = { version = "0.4.0", default-features = false }
 
 # Default (serialization + parallel processing)
-imgfprint = "0.3.3"
+imgfprint = "0.4.0"
 
 # With local ONNX inference
-imgfprint = { version = "0.3.3", features = ["local-embedding"] }
+imgfprint = { version = "0.4.0", features = ["local-embedding"] }
 ```
 
 ### Available Features
@@ -996,7 +1035,7 @@ Enable the `tracing` feature to add performance instrumentation:
 
 ```toml
 [dependencies]
-imgfprint = { version = "0.3.3", features = ["tracing"] }
+imgfprint = { version = "0.4.0", features = ["tracing"] }
 ```
 
 ```rust

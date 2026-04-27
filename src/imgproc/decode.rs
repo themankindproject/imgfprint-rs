@@ -5,12 +5,44 @@ use exif::{In, Reader, Tag};
 use image::{DynamicImage, GenericImageView};
 use std::io::Cursor;
 
-const MAX_DIMENSION: u32 = 8192;
-const MIN_DIMENSION: u32 = 32;
+/// Default maximum image edge length, in pixels. Beyond this, decode is rejected.
+pub const DEFAULT_MAX_DIMENSION: u32 = 8192;
+/// Default minimum image edge length, in pixels. Below this, decode is rejected.
+pub const DEFAULT_MIN_DIMENSION: u32 = 32;
+/// Default maximum input size, in bytes (50 MiB).
+///
+/// Caps memory exposure from maliciously large inputs while still admitting
+/// typical high-resolution photos.
+pub const DEFAULT_MAX_INPUT_BYTES: usize = 50 * 1024 * 1024;
 
-/// Maximum input size: 50MB - prevents memory exhaustion from maliciously large inputs.
-/// This limit prevents OOM attacks while still allowing typical high-res images.
-pub(crate) const MAX_INPUT_BYTES: usize = 50 * 1024 * 1024;
+/// Decode-time guards that an integrator (UCFP, server pipelines) can tune.
+///
+/// All defaults reproduce the historic hardcoded limits. Tighten them on
+/// untrusted input paths; widen `max_input_bytes` and `max_dimension` only
+/// for trusted batch jobs where OOM is acceptable risk.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreprocessConfig {
+    /// Reject inputs whose serialized byte size exceeds this. Enforced
+    /// before any decode allocation and again at the file-read site.
+    pub max_input_bytes: usize,
+    /// Reject images where either edge exceeds this in pixels.
+    pub max_dimension: u32,
+    /// Reject images where either edge is below this in pixels.
+    /// The fingerprinter pipeline needs at least 32 pixels per edge.
+    pub min_dimension: u32,
+}
+
+impl Default for PreprocessConfig {
+    fn default() -> Self {
+        Self {
+            max_input_bytes: DEFAULT_MAX_INPUT_BYTES,
+            max_dimension: DEFAULT_MAX_DIMENSION,
+            min_dimension: DEFAULT_MIN_DIMENSION,
+        }
+    }
+}
 
 /// Reads EXIF orientation from image bytes.
 /// Returns orientation value (1-8) or 1 if no EXIF data found.
@@ -52,44 +84,52 @@ fn apply_orientation_transform(image: DynamicImage, orientation: u32) -> Dynamic
 
 /// Decodes image bytes, validates dimensions, and applies EXIF orientation.
 ///
+/// Uses the default [`PreprocessConfig`]; equivalent to
+/// [`decode_image_with_config`] called with `&PreprocessConfig::default()`.
+///
 /// - Validates input size before processing to prevent OOM attacks.
 /// - Maximum allowed dimension is 8192x8192 pixels (checked both before and after EXIF rotation).
 /// - Minimum required dimension is 32x32 pixels for fingerprinting.
 pub fn decode_image(image_bytes: &[u8]) -> Result<DynamicImage, ImgFprintError> {
+    decode_image_with_config(image_bytes, &PreprocessConfig::default())
+}
+
+/// Decodes image bytes with a tunable [`PreprocessConfig`].
+pub fn decode_image_with_config(
+    image_bytes: &[u8],
+    config: &PreprocessConfig,
+) -> Result<DynamicImage, ImgFprintError> {
     if image_bytes.is_empty() {
         return Err(ImgFprintError::invalid_image("empty input"));
     }
 
-    if image_bytes.len() > MAX_INPUT_BYTES {
+    if image_bytes.len() > config.max_input_bytes {
         return Err(ImgFprintError::invalid_image(format!(
             "input too large: {} bytes exceeds limit of {} bytes",
             image_bytes.len(),
-            MAX_INPUT_BYTES
+            config.max_input_bytes
         )));
     }
 
-    // Single decode pass: detect format and read dimensions before full decode
     let reader = image::ImageReader::new(Cursor::new(image_bytes))
         .with_guessed_format()
         .map_err(|e| ImgFprintError::decode_error(format!("format detection failed: {}", e)))?;
 
-    // Check raw dimensions before full decode to fail fast on oversized images
     if let Ok((width, height)) = reader.into_dimensions() {
-        if width > MAX_DIMENSION || height > MAX_DIMENSION {
+        if width > config.max_dimension || height > config.max_dimension {
             return Err(ImgFprintError::invalid_image(format!(
                 "dimensions {}x{} exceed limit {}x{}",
-                width, height, MAX_DIMENSION, MAX_DIMENSION
+                width, height, config.max_dimension, config.max_dimension
             )));
         }
-        if width < MIN_DIMENSION || height < MIN_DIMENSION {
+        if width < config.min_dimension || height < config.min_dimension {
             return Err(ImgFprintError::image_too_small(format!(
                 "dimensions {}x{} are below minimum {}x{}",
-                width, height, MIN_DIMENSION, MIN_DIMENSION
+                width, height, config.min_dimension, config.min_dimension
             )));
         }
     }
 
-    // Decode the image (single pass - format already detected above)
     let image = image::load_from_memory(image_bytes).map_err(|e| match e {
         image::ImageError::Unsupported(format) => {
             ImgFprintError::UnsupportedFormat(format!("{:?}", format))
@@ -107,22 +147,20 @@ pub fn decode_image(image_bytes: &[u8]) -> Result<DynamicImage, ImgFprintError> 
         other => ImgFprintError::ProcessingError(format!("image processing error: {}", other)),
     })?;
 
-    // Apply EXIF orientation transformation
     let orientation = read_exif_orientation(image_bytes);
     let oriented_image = apply_orientation_transform(image, orientation);
 
-    // Re-validate dimensions after EXIF orientation (rotation can swap width/height)
     let (final_w, final_h) = oriented_image.dimensions();
-    if final_w > MAX_DIMENSION || final_h > MAX_DIMENSION {
+    if final_w > config.max_dimension || final_h > config.max_dimension {
         return Err(ImgFprintError::invalid_image(format!(
             "post-orientation dimensions {}x{} exceed limit {}x{}",
-            final_w, final_h, MAX_DIMENSION, MAX_DIMENSION
+            final_w, final_h, config.max_dimension, config.max_dimension
         )));
     }
-    if final_w < MIN_DIMENSION || final_h < MIN_DIMENSION {
+    if final_w < config.min_dimension || final_h < config.min_dimension {
         return Err(ImgFprintError::image_too_small(format!(
             "post-orientation dimensions {}x{} are below minimum {}x{}",
-            final_w, final_h, MIN_DIMENSION, MIN_DIMENSION
+            final_w, final_h, config.min_dimension, config.min_dimension
         )));
     }
 
@@ -333,8 +371,49 @@ mod tests {
 
     #[test]
     fn test_decode_constants() {
-        assert_eq!(MAX_DIMENSION, 8192);
-        assert_eq!(MIN_DIMENSION, 32);
-        assert_eq!(MAX_INPUT_BYTES, 50 * 1024 * 1024);
+        assert_eq!(DEFAULT_MAX_DIMENSION, 8192);
+        assert_eq!(DEFAULT_MIN_DIMENSION, 32);
+        assert_eq!(DEFAULT_MAX_INPUT_BYTES, 50 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_preprocess_config_default() {
+        let cfg = PreprocessConfig::default();
+        assert_eq!(cfg.max_dimension, DEFAULT_MAX_DIMENSION);
+        assert_eq!(cfg.min_dimension, DEFAULT_MIN_DIMENSION);
+        assert_eq!(cfg.max_input_bytes, DEFAULT_MAX_INPUT_BYTES);
+    }
+
+    #[test]
+    fn test_decode_with_tightened_max_input_bytes() {
+        let img_bytes = create_png_image(100, 100);
+        let tight = PreprocessConfig {
+            max_input_bytes: 10,
+            ..PreprocessConfig::default()
+        };
+        let result = decode_image_with_config(&img_bytes, &tight);
+        assert!(matches!(result, Err(ImgFprintError::InvalidImage(_))));
+    }
+
+    #[test]
+    fn test_decode_with_loosened_min_dimension() {
+        // 31x31 normally fails. Drop the floor and it should pass.
+        let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
+            ImageBuffer::from_fn(31, 31, |_, _| Rgb([128u8, 128, 128]));
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .unwrap();
+
+        let loose = PreprocessConfig {
+            min_dimension: 16,
+            ..PreprocessConfig::default()
+        };
+        assert!(decode_image_with_config(&buf, &loose).is_ok());
+
+        // And still rejected by default.
+        assert!(matches!(
+            decode_image(&buf),
+            Err(ImgFprintError::ImageTooSmall(_))
+        ));
     }
 }

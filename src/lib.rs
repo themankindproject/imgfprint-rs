@@ -71,11 +71,19 @@ mod error;
 mod hash;
 mod imgproc;
 
-pub use core::fingerprint::{ImageFingerprint, MultiHashFingerprint};
+pub use core::fingerprint::{
+    ImageFingerprint, MultiHashConfig, MultiHashFingerprint, DEFAULT_AHASH_WEIGHT,
+    DEFAULT_BLOCK_DISTANCE_THRESHOLD, DEFAULT_BLOCK_WEIGHT, DEFAULT_DHASH_WEIGHT,
+    DEFAULT_GLOBAL_WEIGHT, DEFAULT_PHASH_WEIGHT,
+};
 pub use core::fingerprinter::{FingerprinterContext, ImageFingerprinter};
 pub use core::similarity::Similarity;
 pub use embed::{semantic_similarity, Embedding, EmbeddingProvider};
 pub use hash::algorithms::HashAlgorithm;
+pub use imgproc::decode::{
+    decode_image, decode_image_with_config, PreprocessConfig, DEFAULT_MAX_DIMENSION,
+    DEFAULT_MAX_INPUT_BYTES, DEFAULT_MIN_DIMENSION,
+};
 
 #[cfg(feature = "local-embedding")]
 pub use embed::{LocalProvider, LocalProviderConfig};

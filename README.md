@@ -48,7 +48,7 @@ Perfect for:
 
 ```toml
 [dependencies]
-imgfprint = "0.3.3"
+imgfprint = "0.4.0"
 ```
 
 ### Feature Flags
@@ -63,13 +63,13 @@ imgfprint = "0.3.3"
 Minimal build (no parallel processing):
 ```toml
 [dependencies]
-imgfprint = { version = "0.3.3", default-features = false }
+imgfprint = { version = "0.4.0", default-features = false }
 ```
 
 With local embeddings (requires ONNX model):
 ```toml
 [dependencies]
-imgfprint = { version = "0.3.3", features = ["local-embedding"] }
+imgfprint = { version = "0.4.0", features = ["local-embedding"] }
 ```
 
 ## Quick Start
@@ -161,7 +161,7 @@ ImageFingerprint
 
 ### Multi-Algorithm Comparison
 
-When using `MultiHashFingerprint`, the similarity score uses weighted combination with block-level similarity:
+When using `MultiHashFingerprint`, the similarity score uses weighted combination with block-level similarity. The defaults below ship as `MultiHashConfig::default()` and are reproduced by `compare()`:
 
 - **10%** AHash similarity (average hash, fastest, simplest)
 - **60%** PHash similarity (DCT-based, robust to compression)
@@ -171,7 +171,52 @@ Within each algorithm, similarity is computed as:
 - **40%** global hash similarity (overall structure)
 - **60%** block-level similarity (crop resistance via 4x4 grid)
 
+All six knobs above plus `block_distance_threshold` (default 32 of 64) are
+tunable via [`MultiHashConfig`](#tuning-similarity) without forking.
+
 This provides superior crop resistance compared to global-only comparison.
+
+### Tuning similarity
+
+Pass a `MultiHashConfig` to `compare_with_config` to shift the trade-off — useful when an integrator (UCFP, downstream pipelines) wants per-deployment scoring without forking:
+
+```rust,no_run
+use imgfprint::{ImageFingerprinter, MultiHashConfig};
+
+let bytes_a = std::fs::read("a.jpg")?;
+let bytes_b = std::fs::read("b.jpg")?;
+
+let fp_a = ImageFingerprinter::fingerprint(&bytes_a)?;
+let fp_b = ImageFingerprinter::fingerprint(&bytes_b)?;
+
+// PHash-only scoring — useful when AHash/DHash aren't trusted on this corpus.
+// Setting an algorithm weight to 0.0 removes it from the score.
+let cfg = MultiHashConfig {
+    ahash_weight: 0.0,
+    phash_weight: 1.0,
+    dhash_weight: 0.0,
+    ..MultiHashConfig::default()
+};
+let sim = fp_a.compare_with_config(&fp_b, &cfg);
+# Ok::<_, Box<dyn std::error::Error>>(())
+```
+
+### Tuning decode-time guards
+
+`PreprocessConfig` exposes the input-size and dimension caps that were previously hardcoded. The same config gates **both** the pre-read file-size check and the decode-time guards, so tightened limits aren't silently bypassed via the path API:
+
+```rust,no_run
+use imgfprint::{ImageFingerprinter, PreprocessConfig};
+
+// Tight ingest path: 1 MiB max, 2048 max edge, default 32 min edge.
+let cfg = PreprocessConfig {
+    max_input_bytes: 1 * 1024 * 1024,
+    max_dimension: 2048,
+    ..PreprocessConfig::default()
+};
+let fp = ImageFingerprinter::fingerprint_path_with_preprocess("untrusted.jpg", &cfg)?;
+# Ok::<_, Box<dyn std::error::Error>>(())
+```
 
 ## Performance
 

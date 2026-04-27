@@ -5,22 +5,22 @@ use crate::hash::ahash::{compute_ahash, compute_ahash_from_64x64};
 use crate::hash::algorithms::HashAlgorithm;
 use crate::hash::dhash::{compute_dhash, compute_dhash_from_64x64};
 use crate::hash::phash::{compute_phash, compute_phash_from_64x64};
-use crate::imgproc::decode::{decode_image, MAX_INPUT_BYTES};
+use crate::imgproc::decode::{decode_image_with_config, PreprocessConfig};
 use crate::imgproc::preprocess::{extract_blocks, extract_global_region, Preprocessor};
 use blake3::Hasher;
 use std::cell::RefCell;
 use std::path::Path;
 
 // Reads a file from disk into memory, rejecting inputs larger than the
-// 50 MB cap before any read happens. Keeps oversized files from being
-// pulled into RAM just to be rejected by `decode_image`.
-fn read_image_file(path: &Path) -> Result<Vec<u8>, ImgFprintError> {
+// configured cap before any read happens. Keeps oversized files from being
+// pulled into RAM just to be rejected by the decode pass.
+fn read_image_file(path: &Path, config: &PreprocessConfig) -> Result<Vec<u8>, ImgFprintError> {
     let metadata = std::fs::metadata(path)?;
-    if metadata.len() > MAX_INPUT_BYTES as u64 {
+    if metadata.len() > config.max_input_bytes as u64 {
         return Err(ImgFprintError::IoError(format!(
             "file size {} bytes exceeds maximum {} bytes",
             metadata.len(),
-            MAX_INPUT_BYTES
+            config.max_input_bytes
         )));
     }
     std::fs::read(path).map_err(Into::into)
@@ -69,9 +69,22 @@ impl FingerprinterContext {
         &mut self,
         image_bytes: &[u8],
     ) -> Result<MultiHashFingerprint, ImgFprintError> {
+        self.fingerprint_with_preprocess(image_bytes, &PreprocessConfig::default())
+    }
+
+    /// Computes all perceptual hashes with a tunable [`PreprocessConfig`].
+    ///
+    /// Use this to tighten or widen the decode-time guards
+    /// (`max_input_bytes`, `max_dimension`, `min_dimension`) per call.
+    #[cfg_attr(feature = "tracing", instrument(skip(self, image_bytes, preprocess), fields(size = image_bytes.len())))]
+    pub fn fingerprint_with_preprocess(
+        &mut self,
+        image_bytes: &[u8],
+        preprocess: &PreprocessConfig,
+    ) -> Result<MultiHashFingerprint, ImgFprintError> {
         #[cfg(feature = "tracing")]
         let start = std::time::Instant::now();
-        let result = self.compute_all_hashes(image_bytes);
+        let result = self.compute_all_hashes(image_bytes, preprocess);
         #[cfg(feature = "tracing")]
         debug!(
             duration_ms = start.elapsed().as_millis(),
@@ -93,8 +106,19 @@ impl FingerprinterContext {
         &mut self,
         path: P,
     ) -> Result<MultiHashFingerprint, ImgFprintError> {
-        let bytes = read_image_file(path.as_ref())?;
-        self.fingerprint(&bytes)
+        self.fingerprint_path_with_preprocess(path, &PreprocessConfig::default())
+    }
+
+    /// Reads an image from disk and computes its multi-algorithm fingerprint
+    /// with a tunable [`PreprocessConfig`]. The same config gates both the
+    /// pre-read file-size check and the decode-time guards.
+    pub fn fingerprint_path_with_preprocess<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        preprocess: &PreprocessConfig,
+    ) -> Result<MultiHashFingerprint, ImgFprintError> {
+        let bytes = read_image_file(path.as_ref(), preprocess)?;
+        self.fingerprint_with_preprocess(&bytes, preprocess)
     }
 
     /// Reads an image from disk and computes a single-algorithm fingerprint.
@@ -108,7 +132,7 @@ impl FingerprinterContext {
         path: P,
         algorithm: HashAlgorithm,
     ) -> Result<ImageFingerprint, ImgFprintError> {
-        let bytes = read_image_file(path.as_ref())?;
+        let bytes = read_image_file(path.as_ref(), &PreprocessConfig::default())?;
         self.fingerprint_with(&bytes, algorithm)
     }
 
@@ -121,9 +145,24 @@ impl FingerprinterContext {
         image_bytes: &[u8],
         algorithm: HashAlgorithm,
     ) -> Result<ImageFingerprint, ImgFprintError> {
+        self.fingerprint_with_algorithm_and_preprocess(
+            image_bytes,
+            algorithm,
+            &PreprocessConfig::default(),
+        )
+    }
+
+    /// Computes a single perceptual hash with a tunable [`PreprocessConfig`].
+    #[cfg_attr(feature = "tracing", instrument(skip(self, image_bytes, preprocess), fields(size = image_bytes.len(), algorithm = ?algorithm)))]
+    pub fn fingerprint_with_algorithm_and_preprocess(
+        &mut self,
+        image_bytes: &[u8],
+        algorithm: HashAlgorithm,
+        preprocess: &PreprocessConfig,
+    ) -> Result<ImageFingerprint, ImgFprintError> {
         #[cfg(feature = "tracing")]
         let start = std::time::Instant::now();
-        let result = self.compute_single_hash(image_bytes, algorithm);
+        let result = self.compute_single_hash(image_bytes, algorithm, preprocess);
         #[cfg(feature = "tracing")]
         debug!(
             duration_ms = start.elapsed().as_millis(),
@@ -135,12 +174,13 @@ impl FingerprinterContext {
     fn compute_all_hashes(
         &mut self,
         image_bytes: &[u8],
+        preprocess: &PreprocessConfig,
     ) -> Result<MultiHashFingerprint, ImgFprintError> {
         self.exact_hasher.reset();
         self.exact_hasher.update(image_bytes);
         let exact_hash: [u8; 32] = *self.exact_hasher.finalize().as_bytes();
 
-        let image = decode_image(image_bytes)?;
+        let image = decode_image_with_config(image_bytes, preprocess)?;
         let normalized = self.preprocessor.normalize(&image)?;
 
         let global_region = extract_global_region(&normalized);
@@ -191,12 +231,13 @@ impl FingerprinterContext {
         &mut self,
         image_bytes: &[u8],
         algorithm: HashAlgorithm,
+        preprocess: &PreprocessConfig,
     ) -> Result<ImageFingerprint, ImgFprintError> {
         self.exact_hasher.reset();
         self.exact_hasher.update(image_bytes);
         let exact_hash: [u8; 32] = *self.exact_hasher.finalize().as_bytes();
 
-        let image = decode_image(image_bytes)?;
+        let image = decode_image_with_config(image_bytes, preprocess)?;
         let normalized = self.preprocessor.normalize(&image)?;
 
         let global_region = extract_global_region(&normalized);
@@ -382,6 +423,17 @@ impl ImageFingerprinter {
         result
     }
 
+    /// Computes all perceptual hashes with a tunable [`PreprocessConfig`].
+    pub fn fingerprint_with_preprocess(
+        image_bytes: &[u8],
+        preprocess: &PreprocessConfig,
+    ) -> Result<MultiHashFingerprint, ImgFprintError> {
+        SHARED_CTX.with(|ctx| {
+            ctx.borrow_mut()
+                .fingerprint_with_preprocess(image_bytes, preprocess)
+        })
+    }
+
     /// Reads an image from disk and computes its multi-algorithm fingerprint.
     ///
     /// Convenience wrapper around [`fingerprint`](Self::fingerprint) that handles
@@ -394,8 +446,17 @@ impl ImageFingerprinter {
     pub fn fingerprint_path<P: AsRef<Path>>(
         path: P,
     ) -> Result<MultiHashFingerprint, ImgFprintError> {
-        let bytes = read_image_file(path.as_ref())?;
-        Self::fingerprint(&bytes)
+        Self::fingerprint_path_with_preprocess(path, &PreprocessConfig::default())
+    }
+
+    /// Reads an image from disk and computes its multi-algorithm fingerprint
+    /// with a tunable [`PreprocessConfig`].
+    pub fn fingerprint_path_with_preprocess<P: AsRef<Path>>(
+        path: P,
+        preprocess: &PreprocessConfig,
+    ) -> Result<MultiHashFingerprint, ImgFprintError> {
+        let bytes = read_image_file(path.as_ref(), preprocess)?;
+        Self::fingerprint_with_preprocess(&bytes, preprocess)
     }
 
     /// Reads an image from disk and computes a single-algorithm fingerprint.
@@ -408,7 +469,7 @@ impl ImageFingerprinter {
         path: P,
         algorithm: HashAlgorithm,
     ) -> Result<ImageFingerprint, ImgFprintError> {
-        let bytes = read_image_file(path.as_ref())?;
+        let bytes = read_image_file(path.as_ref(), &PreprocessConfig::default())?;
         Self::fingerprint_with(&bytes, algorithm)
     }
 
@@ -963,15 +1024,34 @@ mod tests {
 
     #[test]
     fn test_fingerprint_path_oversized_file() {
+        use crate::imgproc::decode::DEFAULT_MAX_INPUT_BYTES;
+
         let dir = std::env::temp_dir();
         let path = dir.join("imgfprint_test_oversized.bin");
-        // Allocate an empty file but report a size > 50 MB via sparse-write.
-        // Truncate to MAX_INPUT_BYTES + 1 without actually allocating disk.
         let f = std::fs::File::create(&path).unwrap();
-        f.set_len((MAX_INPUT_BYTES as u64) + 1).unwrap();
+        f.set_len((DEFAULT_MAX_INPUT_BYTES as u64) + 1).unwrap();
         drop(f);
 
         let err = ImageFingerprinter::fingerprint_path(&path).unwrap_err();
+        assert!(matches!(err, ImgFprintError::IoError(_)), "got: {:?}", err);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_preprocess_config_path_size_guard() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("imgfprint_test_preprocess_path_guard.bin");
+        let f = std::fs::File::create(&path).unwrap();
+        // Just over 1 KiB.
+        f.set_len(1025).unwrap();
+        drop(f);
+
+        let tight = PreprocessConfig {
+            max_input_bytes: 1024,
+            ..PreprocessConfig::default()
+        };
+        let err = ImageFingerprinter::fingerprint_path_with_preprocess(&path, &tight).unwrap_err();
         assert!(matches!(err, ImgFprintError::IoError(_)), "got: {:?}", err);
 
         let _ = std::fs::remove_file(&path);
