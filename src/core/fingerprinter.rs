@@ -1077,7 +1077,7 @@ mod tests {
 
         let mut single_set = HashSet::new();
         let single = ImageFingerprinter::fingerprint_with(&img1, HashAlgorithm::DHash).unwrap();
-        single_set.insert(single.clone());
+        single_set.insert(single);
         single_set.insert(single);
         assert_eq!(single_set.len(), 1);
     }

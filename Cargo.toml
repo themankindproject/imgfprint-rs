@@ -1,6 +1,6 @@
 [package]
 name = "imgfprint"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "High-performance, deterministic image fingerprinting library"
 license = "MIT"
@@ -32,6 +32,7 @@ rayon = { version = "1.10", optional = true }
 tract-onnx = { version = "0.22.1", optional = true }
 tracing = { version = "0.1", optional = true }
 subtle = "2.6"
+bytemuck = { version = "1.18", features = ["derive"] }
 
 [features]
 default = ["serde", "parallel"]

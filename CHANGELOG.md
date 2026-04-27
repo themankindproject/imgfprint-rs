@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-04-27
+
+### Added
+
+- **`pub const FORMAT_VERSION: u32 = 1`** at crate root, plus `ImageFingerprint::format_version()` and `MultiHashFingerprint::format_version()` accessors. Persist alongside fingerprint bytes (or in a sidecar manifest) and refuse comparison across mismatched versions to guard against algorithm-version drift. The constant only changes when the algorithm output changes; layout drift is caught at compile time independently.
+
+- **`bytemuck::Pod + Zeroable` derives** on `ImageFingerprint` and `MultiHashFingerprint` with `#[repr(C)]`. Enables zero-copy persistence:
+
+  ```rust
+  use imgfprint::MultiHashFingerprint;
+  let bytes: &[u8] = bytemuck::cast_slice(&fingerprints);
+  // ...write to disk / mmap / send over the wire...
+  let back: &[MultiHashFingerprint] = bytemuck::cast_slice(bytes);
+  ```
+
+  Unblocks UCFP's `index` crate to store millions of fingerprints without serde-roundtrip overhead.
+
+- **Compile-time layout assertions** — `const _` size checks that `ImageFingerprint` is exactly 168 bytes and `MultiHashFingerprint` is exactly 536 bytes. Any accidental field reorder or padding addition fails the build, so consumers relying on `bytemuck::cast_slice` can't be silently broken.
+
+### Changed
+
+- **`ImageFingerprint` and `MultiHashFingerprint` now derive `Copy`** (required by `bytemuck::Pod`). Trade-off: move-by-value silently memcpys 168 / 536 bytes; prefer `&Fingerprint` borrows in hot loops where this matters. Purely additive change — nothing that compiled before fails to compile now.
+
+- **`#[repr(C)]`** added to both fingerprint types for stable cross-version binary layout. The default `repr(Rust)` layout was already padding-free at 168 / 536 bytes, so this is a guarantee, not a layout change.
+
+### Notes for UCFP integrators
+
+Storing fingerprints: cast a `&[MultiHashFingerprint]` to `&[u8]` with `bytemuck::cast_slice` before writing to your index. Persist the `FORMAT_VERSION` constant alongside (in your manifest or as a sidecar header). On read, verify the version matches before casting back. The layout-stability assertions guarantee that within a `FORMAT_VERSION`, the byte representation is identical across builds and platforms with the same endianness.
+
 ## [0.4.0] - 2026-04-27
 
 ### Added
@@ -268,7 +297,8 @@ Per-algorithm DCT/grid/hash-bit reconfiguration (different `dct_size`, `block_gr
 - Semantic embeddings via external providers
 - Local ONNX inference (optional feature)
 
-[Unreleased]: https://github.com/themankindproject/imgfprint-rs/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/themankindproject/imgfprint-rs/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/themankindproject/imgfprint-rs/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/themankindproject/imgfprint-rs/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/themankindproject/imgfprint-rs/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/themankindproject/imgfprint-rs/compare/v0.3.1...v0.3.2

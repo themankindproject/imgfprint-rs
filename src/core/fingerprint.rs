@@ -83,9 +83,27 @@ impl Default for MultiHashConfig {
 /// Fingerprints are deterministic and comparable across platforms. The structure
 /// includes exact hashing for identical detection and perceptual hashing for
 /// similarity detection with resistance to resizing, compression, and cropping.
+///
+/// # Binary layout
+///
+/// `#[repr(C)]` with no padding bytes (168 bytes total: 32 + 8 + 128). Implements
+/// [`bytemuck::Pod`] / [`bytemuck::Zeroable`] so a `&[ImageFingerprint]` can be
+/// zero-copy cast to `&[u8]` for mmap-based persistence:
+///
+/// ```rust
+/// use imgfprint::ImageFingerprint;
+/// # fn ex(fps: &[ImageFingerprint]) -> &[u8] {
+/// bytemuck::cast_slice(fps)
+/// # }
+/// ```
+///
+/// `Copy` is derived because `bytemuck::Pod` requires it; the trade-off is
+/// that move-by-value silently memcpys 168 bytes. Prefer borrowing
+/// (`&ImageFingerprint`) in hot loops where this matters.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
 pub struct ImageFingerprint {
     pub(crate) exact: [u8; 32],
     pub(crate) global_hash: u64,
@@ -110,6 +128,17 @@ impl ImageFingerprint {
     #[must_use]
     pub fn exact_hash(&self) -> &[u8; 32] {
         &self.exact
+    }
+
+    /// Returns the on-disk format version this fingerprint was computed under.
+    ///
+    /// Equal to [`crate::FORMAT_VERSION`]. Persist alongside fingerprint bytes
+    /// (or in a sidecar manifest) and refuse comparison across mismatched
+    /// versions to guard against algorithm-version drift.
+    #[inline]
+    #[must_use]
+    pub const fn format_version() -> u32 {
+        crate::FORMAT_VERSION
     }
 
     /// Returns the global perceptual hash from the center 32x32 region.
@@ -187,15 +216,43 @@ impl ImageFingerprint {
 ///
 /// Provides enhanced similarity detection by combining results from multiple
 /// hash algorithms with weighted combination for improved accuracy.
+///
+/// # Binary layout
+///
+/// `#[repr(C)]` with no padding bytes (536 bytes total: 32 + 3 × 168). Implements
+/// [`bytemuck::Pod`] / [`bytemuck::Zeroable`] for zero-copy cast to `&[u8]`.
+/// See [`ImageFingerprint`] for an example.
+///
+/// Stable layout is enforced at compile time via a `const _` size assertion;
+/// any accidental layout drift fails the build.
+///
+/// `Copy` is derived for `bytemuck::Pod` compatibility; move-by-value silently
+/// memcpys 536 bytes. Prefer borrowing (`&MultiHashFingerprint`) in hot loops.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
 pub struct MultiHashFingerprint {
     pub(crate) exact: [u8; 32],
     pub(crate) ahash: ImageFingerprint,
     pub(crate) phash: ImageFingerprint,
     pub(crate) dhash: ImageFingerprint,
 }
+
+// Layout-stability gate. If anyone accidentally introduces padding or reorders
+// fields in a way that changes the binary size, the build fails here. UCFP and
+// any other consumer relying on bytemuck::cast_slice would otherwise get
+// silently broken artefacts.
+const _: () = {
+    assert!(
+        core::mem::size_of::<ImageFingerprint>() == 168,
+        "ImageFingerprint binary layout drifted"
+    );
+    assert!(
+        core::mem::size_of::<MultiHashFingerprint>() == 536,
+        "MultiHashFingerprint binary layout drifted"
+    );
+};
 
 impl MultiHashFingerprint {
     pub(crate) fn new(
@@ -217,6 +274,17 @@ impl MultiHashFingerprint {
     #[must_use]
     pub fn exact_hash(&self) -> &[u8; 32] {
         &self.exact
+    }
+
+    /// Returns the on-disk format version this fingerprint was computed under.
+    ///
+    /// Equal to [`crate::FORMAT_VERSION`]. Persist alongside fingerprint bytes
+    /// (or in a sidecar manifest) and refuse comparison across mismatched
+    /// versions to guard against algorithm-version drift.
+    #[inline]
+    #[must_use]
+    pub const fn format_version() -> u32 {
+        crate::FORMAT_VERSION
     }
 
     /// Returns the AHash-based fingerprint.
@@ -466,5 +534,61 @@ mod tests {
     fn fingerprint_unused_helper_compiles() {
         // Keeps `fp()` referenced so the helper test util doesn't bit-rot.
         let _ = fp(0x1234, 0xABCD);
+    }
+
+    #[test]
+    fn format_version_is_one() {
+        assert_eq!(crate::FORMAT_VERSION, 1);
+        assert_eq!(ImageFingerprint::format_version(), 1);
+        assert_eq!(MultiHashFingerprint::format_version(), 1);
+    }
+
+    #[test]
+    fn image_fingerprint_layout_is_stable() {
+        assert_eq!(core::mem::size_of::<ImageFingerprint>(), 168);
+        assert_eq!(core::mem::align_of::<ImageFingerprint>(), 8);
+    }
+
+    #[test]
+    fn multi_hash_fingerprint_layout_is_stable() {
+        assert_eq!(core::mem::size_of::<MultiHashFingerprint>(), 536);
+        assert_eq!(core::mem::align_of::<MultiHashFingerprint>(), 8);
+    }
+
+    #[test]
+    fn image_fingerprint_cast_slice_roundtrips() {
+        let fps = vec![
+            ImageFingerprint::new([1u8; 32], 0xAAAA_BBBB_CCCC_DDDD, [0x1234; 16]),
+            ImageFingerprint::new([2u8; 32], 0xDEAD_BEEF_CAFE_BABE, [0xFEDC; 16]),
+            ImageFingerprint::new([3u8; 32], 0, [0; 16]),
+        ];
+        let bytes: &[u8] = bytemuck::cast_slice(&fps);
+        assert_eq!(bytes.len(), 3 * 168);
+
+        let back: &[ImageFingerprint] = bytemuck::cast_slice(bytes);
+        assert_eq!(back.len(), fps.len());
+        assert_eq!(back, &fps[..]);
+    }
+
+    #[test]
+    fn multi_hash_fingerprint_cast_slice_roundtrips() {
+        let fps = vec![
+            multi([1u8; 32], 0x1111, 0x2222, 0x3333),
+            multi([2u8; 32], 0xAAAA, 0xBBBB, 0xCCCC),
+        ];
+        let bytes: &[u8] = bytemuck::cast_slice(&fps);
+        assert_eq!(bytes.len(), 2 * 536);
+
+        let back: &[MultiHashFingerprint] = bytemuck::cast_slice(bytes);
+        assert_eq!(back.len(), fps.len());
+        assert_eq!(back, &fps[..]);
+    }
+
+    #[test]
+    fn fingerprint_zeroed_is_valid() {
+        // Zeroable means an all-zero bit pattern is a valid value of the type.
+        let z: MultiHashFingerprint = bytemuck::Zeroable::zeroed();
+        assert_eq!(*z.exact_hash(), [0u8; 32]);
+        assert_eq!(z.ahash().global_hash(), 0);
     }
 }

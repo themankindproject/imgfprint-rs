@@ -13,6 +13,40 @@ Legend:
 
 ---
 
+## 0. Next Up: 0.4.1 (UCFP-unblocking patch)
+
+A small, additive patch that unblocks UCFP's persistence story without
+the structural breakage that 0.5.0 needs.
+
+| # | Item | Priority | Effort | Status |
+|---|------|----------|--------|--------|
+| 0.1 | **`pub const FORMAT_VERSION: u32`** at crate root + `MultiHashFingerprint::format_version()` accessor returning the same constant | P0 | S | planned |
+| 0.2 | **`bytemuck::Pod + Zeroable`** derives on `ImageFingerprint` / `MultiHashFingerprint` with `#[repr(C)]` for stable layout | P0 | S | planned |
+| 0.3 | **Zero-copy persistence example** — `bytemuck::cast_slice(&fingerprints)` ↔ `&[u8]` for UCFP's mmap'd index | P0 | S | planned |
+| 0.4 | **Layout-stability test** — `static_assertions::const_assert_eq!(size_of::<MultiHashFingerprint>(), 536)` so any accidental layout drift is caught at compile time | P1 | S | planned |
+
+Why this set: UCFP's `index` crate stores millions of fingerprints. Today
+serializing them goes through serde-roundtrip (slow, allocates).
+`bytemuck::cast_slice` gives a zero-copy `&[u8]` view, mmap-friendly. The
+`FORMAT_VERSION` constant lets UCFP refuse cross-version compares without
+embedding a version field in every fingerprint (which would change layout
+and balloon storage).
+
+Design choice: using full `Pod + Zeroable`. The earlier plan was to use
+`NoUninit + AnyBitPattern + Zeroable` to avoid `Copy`, but in current
+`bytemuck` (1.18+) those traits also require `Copy`. So `Copy` is
+unavoidable if we want any `cast_slice` capability. Trade-off accepted:
+move-by-value memcpys 168 / 536 bytes; `&Fingerprint` borrows in hot
+loops avoid this. If we ever want to drop `Copy`, we'd switch to the
+`zerocopy` crate (different trait shape) — left as a future option.
+
+Not in this patch:
+- Removing the redundant per-algorithm `exact: [u8; 32]` field from inner
+  `ImageFingerprint`s (saves 96 bytes per `MultiHashFingerprint`). It's a
+  layout break and changes `Hash` derivation; deferred to 0.5.0.
+
+---
+
 ## 1. Configurability Completeness
 
 The 0.4.0 release tuned every weight and decode-time guard. What's left

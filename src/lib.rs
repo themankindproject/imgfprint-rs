@@ -65,6 +65,24 @@
 
 #![deny(missing_docs)]
 
+/// On-disk format version of the binary fingerprint representation.
+///
+/// Bump this whenever the layout, hash semantics, or normalization pipeline
+/// changes in a way that makes fingerprints from older versions incomparable.
+/// Persist this value alongside stored fingerprints (e.g., in UCFP's index
+/// manifest) and refuse comparison across mismatched versions.
+///
+/// Stable layout is enforced at compile time via `const _` size assertions
+/// in `core::fingerprint`; any accidental layout drift fails the build, so
+/// in practice this constant only changes when the algorithm output changes,
+/// not when fields are reordered.
+///
+/// # Versions
+///
+/// - `1` — 0.4.x format. `ImageFingerprint` is `[u8; 32] + u64 + [u64; 16]`
+///   = 168 bytes; `MultiHashFingerprint` is 32 + 3 × 168 = 536 bytes.
+pub const FORMAT_VERSION: u32 = 1;
+
 mod core;
 mod embed;
 mod error;
