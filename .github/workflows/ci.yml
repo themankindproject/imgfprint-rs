@@ -26,6 +26,33 @@ jobs:
       - name: Run tests
         run: cargo test --all-features 
 
+  feature-tests:
+    name: Feature tests (${{ matrix.features.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - name: no-default
+            args: --no-default-features
+          - name: serde
+            args: --no-default-features --features serde
+          - name: parallel
+            args: --no-default-features --features parallel
+          - name: tracing
+            args: --no-default-features --features tracing
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run feature tests
+        run: cargo test ${{ matrix.features.args }}
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

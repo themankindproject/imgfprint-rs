@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-05-04
+
+### Added
+
+- **Zero-copy persistence example**: Added `examples/zero_copy_persistence.rs`, showing `bytemuck::cast_slice` persistence for `MultiHashFingerprint` slices plus `FORMAT_VERSION` validation before casting bytes back.
+
+- **Feature-combination CI coverage**: Added CI coverage for no-default builds and individual `serde`, `parallel`, and `tracing` feature combinations so optional-feature regressions are caught before release.
+
+### Changed
+
+- **Improved fingerprinting hot-path buffer reuse**: `FingerprinterContext` now keeps the normalized 256x256 grayscale buffer owned by the preprocessor during fingerprinting instead of moving it into a temporary `GrayImage`. This avoids a repeated 64 KiB allocation/copy pattern in repeated and batch fingerprinting without changing hash semantics or public APIs.
+
+- **Refined optional `tracing` instrumentation**: Removed duplicate wrapper-level spans from static convenience methods, added stage-level timing events for exact hash, decode, normalize, region extraction, block extraction, and hash computation, and added success/failure counts to batch tracing events.
+
+### Fixed
+
+- **No-default feature testing with `tracing`**: Marked the `serialize` example as requiring the `serde` feature so `cargo test --no-default-features --features tracing` no longer fails on an unrelated serialization example.
+
+### Notes
+
+- No fingerprint format, binary layout, or hash semantic changes. `FORMAT_VERSION` remains `1`.
+
 ## [0.4.1] - 2026-04-27
 
 ### Added

@@ -13,37 +13,20 @@ Legend:
 
 ---
 
-## 0. Next Up: 0.4.1 (UCFP-unblocking patch)
+## 0. Next Up: 0.4.2 (release-readiness patch)
 
-A small, additive patch that unblocks UCFP's persistence story without
-the structural breakage that 0.5.0 needs.
+A small, additive patch that finishes the 0.4.x persistence polish and
+release confidence work without changing fingerprint layout or hash
+semantics.
 
 | # | Item | Priority | Effort | Status |
 |---|------|----------|--------|--------|
-| 0.1 | **`pub const FORMAT_VERSION: u32`** at crate root + `MultiHashFingerprint::format_version()` accessor returning the same constant | P0 | S | planned |
-| 0.2 | **`bytemuck::Pod + Zeroable`** derives on `ImageFingerprint` / `MultiHashFingerprint` with `#[repr(C)]` for stable layout | P0 | S | planned |
-| 0.3 | **Zero-copy persistence example** — `bytemuck::cast_slice(&fingerprints)` ↔ `&[u8]` for UCFP's mmap'd index | P0 | S | planned |
-| 0.4 | **Layout-stability test** — `static_assertions::const_assert_eq!(size_of::<MultiHashFingerprint>(), 536)` so any accidental layout drift is caught at compile time | P1 | S | planned |
+| 0.1 | **Zero-copy persistence example** — `bytemuck::cast_slice(&fingerprints)` ↔ `&[u8]` with `FORMAT_VERSION` validation for mmap'd indexes | P0 | S | done |
+| 0.2 | **Feature-combination CI coverage** — `--no-default-features`, `serde`, `parallel`, and `tracing` builds | P1 | S | done |
+| 0.3 | **0.4.2 release notes** — document no fingerprint format/layout/semantic changes; `FORMAT_VERSION` remains `1` | P1 | S | done |
 
-Why this set: UCFP's `index` crate stores millions of fingerprints. Today
-serializing them goes through serde-roundtrip (slow, allocates).
-`bytemuck::cast_slice` gives a zero-copy `&[u8]` view, mmap-friendly. The
-`FORMAT_VERSION` constant lets UCFP refuse cross-version compares without
-embedding a version field in every fingerprint (which would change layout
-and balloon storage).
-
-Design choice: using full `Pod + Zeroable`. The earlier plan was to use
-`NoUninit + AnyBitPattern + Zeroable` to avoid `Copy`, but in current
-`bytemuck` (1.18+) those traits also require `Copy`. So `Copy` is
-unavoidable if we want any `cast_slice` capability. Trade-off accepted:
-move-by-value memcpys 168 / 536 bytes; `&Fingerprint` borrows in hot
-loops avoid this. If we ever want to drop `Copy`, we'd switch to the
-`zerocopy` crate (different trait shape) — left as a future option.
-
-Not in this patch:
-- Removing the redundant per-algorithm `exact: [u8; 32]` field from inner
-  `ImageFingerprint`s (saves 96 bytes per `MultiHashFingerprint`). It's a
-  layout break and changes `Hash` derivation; deferred to 0.5.0.
+After 0.4.2, the next meaningful work is structural 0.5.0 planning:
+algorithm subsetting, layout cleanup, and runtime-sized hash buffers.
 
 ---
 
@@ -167,31 +150,6 @@ These items only matter if `ucfp` (or another integrator crate) consumes
 | 8.4 | **`cargo-deny` in CI** — license + advisory checks | P1 | S | Particularly relevant before publishing; catches incompatible dependency licenses. |
 | 8.5 | **Reproducible-build verification** — same input → same crate hash | P2 | S | Useful for supply-chain auditability. |
 | 8.6 | **Release-notes automation** from CHANGELOG | P2 | S | A small workflow that opens the GitHub release with the relevant CHANGELOG section. |
-
----
-
-## 9. Things That Are Already Done in 0.4.0
-
-For reference, so future contributors don't re-litigate them:
-
-- ✅ Tunable inter-algorithm weights (`MultiHashConfig.{ahash,phash,dhash}_weight`)
-- ✅ Tunable intra-algorithm global/block split (`MultiHashConfig.{global,block}_weight`)
-- ✅ Tunable block-distance threshold (`MultiHashConfig.block_distance_threshold`)
-- ✅ Tunable decode-time guards (`PreprocessConfig.{max_input_bytes,max_dimension,min_dimension}`)
-- ✅ Path-API and bytes-API gated by the same `PreprocessConfig` (no silent bypass)
-- ✅ All previous APIs preserved as default-config wrappers (zero behaviour change)
-- ✅ `compute_similarity_with_weights` exposed for raw `ImageFingerprint` callers
-- ✅ `Hash` derive on fingerprint types (HashSet/HashMap usable)
-- ✅ `fingerprint_path` / `fingerprint_path_with_*` convenience methods
-- ✅ `ImgFprintError::IoError` variant for file-read failures
-- ✅ POPCNT-backed Hamming distance
-- ✅ Cached ONNX `RunnableModel` (eliminates per-inference clone overhead)
-- ✅ rayon `map_init` per-worker context caching in batch APIs
-- ✅ NaN/infinity threshold clamping in `is_similar`
-- ✅ Single decode pass (no double-decode for dimension check)
-- ✅ Post-EXIF dimension re-validation
-- ✅ Bilinear resample identity-case fast path
-- ✅ Generic `EmbeddingProvider` trait + `Embedding { vector, model_id }` for cross-modal alignment
 
 ---
 

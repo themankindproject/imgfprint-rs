@@ -273,6 +273,7 @@ See the `examples/` directory for complete working examples:
 - `compare_images.rs` - Compare two images and show similarity
 - `find_duplicates.rs` - Find duplicate images in a directory
 - `serialize.rs` - Serialize/deserialize fingerprints to JSON and binary
+- `zero_copy_persistence.rs` - Persist `MultiHashFingerprint` slices as bytes with `bytemuck`
 - `similarity_search.rs` - Perceptual similarity search in a directory
 - `semantic_search.rs` - Content-based image search with CLIP embeddings (requires `local-embedding` feature)
 

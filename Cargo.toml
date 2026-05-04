@@ -1,6 +1,6 @@
 [package]
 name = "imgfprint"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 description = "High-performance, deterministic image fingerprinting library"
 license = "MIT"
@@ -52,6 +52,13 @@ proptest = "1.5"
 [[example]]
 name = "semantic_search"
 required-features = ["local-embedding"]
+
+[[example]]
+name = "serialize"
+required-features = ["serde"]
+
+[[example]]
+name = "zero_copy_persistence"
 
 [[bench]]
 name = "benchmark"

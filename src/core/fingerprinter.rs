@@ -12,6 +12,8 @@ use crate::imgproc::preprocess::{
 use blake3::Hasher;
 use std::cell::RefCell;
 use std::path::Path;
+#[cfg(feature = "tracing")]
+use std::time::Instant;
 
 // Reads a file from disk into memory, rejecting inputs larger than the
 // configured cap before any read happens. Keeps oversized files from being
@@ -35,6 +37,56 @@ thread_local! {
 
 #[cfg(feature = "tracing")]
 use tracing::{debug, instrument};
+
+macro_rules! trace_stage {
+    ($stage:literal, $body:block) => {{
+        #[cfg(feature = "tracing")]
+        let stage_start = Instant::now();
+        let stage_result = $body;
+        #[cfg(feature = "tracing")]
+        debug!(
+            stage = $stage,
+            duration_us = stage_start.elapsed().as_micros(),
+            "fingerprint stage completed"
+        );
+        stage_result
+    }};
+}
+
+macro_rules! trace_result_stage {
+    ($stage:literal, $body:block) => {{
+        #[cfg(feature = "tracing")]
+        let stage_start = Instant::now();
+        let stage_result = $body;
+        match stage_result {
+            Ok(value) => {
+                #[cfg(feature = "tracing")]
+                debug!(
+                    stage = $stage,
+                    duration_us = stage_start.elapsed().as_micros(),
+                    "fingerprint stage completed"
+                );
+                value
+            }
+            Err(error) => {
+                #[cfg(feature = "tracing")]
+                debug!(
+                    stage = $stage,
+                    duration_us = stage_start.elapsed().as_micros(),
+                    error = ?error,
+                    "fingerprint stage failed"
+                );
+                return Err(error);
+            }
+        }
+    }};
+}
+
+#[cfg(feature = "tracing")]
+fn count_results<S, T>(results: &[(S, Result<T, ImgFprintError>)]) -> (usize, usize) {
+    let failed = results.iter().filter(|(_, result)| result.is_err()).count();
+    (results.len() - failed, failed)
+}
 
 /// Context for high-performance fingerprinting with buffer reuse.
 ///
@@ -178,51 +230,64 @@ impl FingerprinterContext {
         image_bytes: &[u8],
         preprocess: &PreprocessConfig,
     ) -> Result<MultiHashFingerprint, ImgFprintError> {
-        self.exact_hasher.reset();
-        self.exact_hasher.update(image_bytes);
-        let exact_hash: [u8; 32] = *self.exact_hasher.finalize().as_bytes();
+        let exact_hash: [u8; 32] = trace_stage!("exact_hash", {
+            self.exact_hasher.reset();
+            self.exact_hasher.update(image_bytes);
+            *self.exact_hasher.finalize().as_bytes()
+        });
 
-        let image = decode_image_with_config(image_bytes, preprocess)?;
-        let normalized = self.preprocessor.normalize_as_slice(&image)?;
+        let image = trace_result_stage!("decode", {
+            decode_image_with_config(image_bytes, preprocess)
+        });
+        let normalized = trace_result_stage!("normalize", {
+            self.preprocessor.normalize_as_slice(&image)
+        });
 
-        let global_region = extract_global_region_from_raw(normalized);
-        let blocks = extract_blocks_from_raw(normalized);
+        let global_region = trace_stage!("extract_global_region", {
+            extract_global_region_from_raw(normalized)
+        });
+        let blocks = trace_stage!("extract_blocks", { extract_blocks_from_raw(normalized) });
 
-        #[cfg(feature = "parallel")]
-        let (ahash_fp, phash_fp, dhash_fp) = {
-            let (ahash_result, (phash_result, dhash_result)) = rayon::join(
-                || Self::compute_ahash_data(&global_region, &blocks),
-                || {
-                    rayon::join(
-                        || Self::compute_phash_data(&global_region, &blocks),
-                        || Self::compute_dhash_data(&global_region, &blocks),
-                    )
-                },
-            );
+        let (ahash_fp, phash_fp, dhash_fp) = trace_stage!("multi_hash", {
+            #[cfg(feature = "parallel")]
+            {
+                let (ahash_result, (phash_result, dhash_result)) = rayon::join(
+                    || Self::compute_ahash_data(&global_region, &blocks),
+                    || {
+                        rayon::join(
+                            || Self::compute_phash_data(&global_region, &blocks),
+                            || Self::compute_dhash_data(&global_region, &blocks),
+                        )
+                    },
+                );
 
-            let (ahash_global, ahash_blocks) = ahash_result;
-            let (phash_global, phash_blocks) = phash_result;
-            let (dhash_global, dhash_blocks) = dhash_result;
+                let (ahash_global, ahash_blocks) = ahash_result;
+                let (phash_global, phash_blocks) = phash_result;
+                let (dhash_global, dhash_blocks) = dhash_result;
 
-            (
-                ImageFingerprint::new(exact_hash, ahash_global, ahash_blocks),
-                ImageFingerprint::new(exact_hash, phash_global, phash_blocks),
-                ImageFingerprint::new(exact_hash, dhash_global, dhash_blocks),
-            )
-        };
+                (
+                    ImageFingerprint::new(exact_hash, ahash_global, ahash_blocks),
+                    ImageFingerprint::new(exact_hash, phash_global, phash_blocks),
+                    ImageFingerprint::new(exact_hash, dhash_global, dhash_blocks),
+                )
+            }
 
-        #[cfg(not(feature = "parallel"))]
-        let (ahash_fp, phash_fp, dhash_fp) = {
-            let (ahash_global, ahash_blocks) = Self::compute_ahash_data(&global_region, &blocks);
-            let (phash_global, phash_blocks) = Self::compute_phash_data(&global_region, &blocks);
-            let (dhash_global, dhash_blocks) = Self::compute_dhash_data(&global_region, &blocks);
+            #[cfg(not(feature = "parallel"))]
+            {
+                let (ahash_global, ahash_blocks) =
+                    Self::compute_ahash_data(&global_region, &blocks);
+                let (phash_global, phash_blocks) =
+                    Self::compute_phash_data(&global_region, &blocks);
+                let (dhash_global, dhash_blocks) =
+                    Self::compute_dhash_data(&global_region, &blocks);
 
-            (
-                ImageFingerprint::new(exact_hash, ahash_global, ahash_blocks),
-                ImageFingerprint::new(exact_hash, phash_global, phash_blocks),
-                ImageFingerprint::new(exact_hash, dhash_global, dhash_blocks),
-            )
-        };
+                (
+                    ImageFingerprint::new(exact_hash, ahash_global, ahash_blocks),
+                    ImageFingerprint::new(exact_hash, phash_global, phash_blocks),
+                    ImageFingerprint::new(exact_hash, dhash_global, dhash_blocks),
+                )
+            }
+        });
 
         Ok(MultiHashFingerprint::new(
             exact_hash, ahash_fp, phash_fp, dhash_fp,
@@ -235,21 +300,31 @@ impl FingerprinterContext {
         algorithm: HashAlgorithm,
         preprocess: &PreprocessConfig,
     ) -> Result<ImageFingerprint, ImgFprintError> {
-        self.exact_hasher.reset();
-        self.exact_hasher.update(image_bytes);
-        let exact_hash: [u8; 32] = *self.exact_hasher.finalize().as_bytes();
+        let exact_hash: [u8; 32] = trace_stage!("exact_hash", {
+            self.exact_hasher.reset();
+            self.exact_hasher.update(image_bytes);
+            *self.exact_hasher.finalize().as_bytes()
+        });
 
-        let image = decode_image_with_config(image_bytes, preprocess)?;
-        let normalized = self.preprocessor.normalize_as_slice(&image)?;
+        let image = trace_result_stage!("decode", {
+            decode_image_with_config(image_bytes, preprocess)
+        });
+        let normalized = trace_result_stage!("normalize", {
+            self.preprocessor.normalize_as_slice(&image)
+        });
 
-        let global_region = extract_global_region_from_raw(normalized);
-        let blocks = extract_blocks_from_raw(normalized);
+        let global_region = trace_stage!("extract_global_region", {
+            extract_global_region_from_raw(normalized)
+        });
+        let blocks = trace_stage!("extract_blocks", { extract_blocks_from_raw(normalized) });
 
-        let (global_hash, block_hashes) = match algorithm {
-            HashAlgorithm::AHash => Self::compute_ahash_data(&global_region, &blocks),
-            HashAlgorithm::PHash => Self::compute_phash_data(&global_region, &blocks),
-            HashAlgorithm::DHash => Self::compute_dhash_data(&global_region, &blocks),
-        };
+        let (global_hash, block_hashes) = trace_stage!("single_hash", {
+            match algorithm {
+                HashAlgorithm::AHash => Self::compute_ahash_data(&global_region, &blocks),
+                HashAlgorithm::PHash => Self::compute_phash_data(&global_region, &blocks),
+                HashAlgorithm::DHash => Self::compute_dhash_data(&global_region, &blocks),
+            }
+        });
 
         Ok(ImageFingerprint::new(exact_hash, global_hash, block_hashes))
     }
@@ -409,20 +484,8 @@ impl ImageFingerprinter {
     /// # Errors
     ///
     /// Returns `ImgFprintError` if any algorithm fails.
-    #[cfg_attr(feature = "tracing", instrument(skip(image_bytes), fields(size = image_bytes.len())))]
     pub fn fingerprint(image_bytes: &[u8]) -> Result<MultiHashFingerprint, ImgFprintError> {
-        #[cfg(feature = "tracing")]
-        let start = std::time::Instant::now();
-
-        let result = SHARED_CTX.with(|ctx| ctx.borrow_mut().fingerprint(image_bytes));
-
-        #[cfg(feature = "tracing")]
-        debug!(
-            duration_ms = start.elapsed().as_millis(),
-            "ImageFingerprinter::fingerprint completed"
-        );
-
-        result
+        SHARED_CTX.with(|ctx| ctx.borrow_mut().fingerprint(image_bytes))
     }
 
     /// Computes all perceptual hashes with a tunable [`PreprocessConfig`].
@@ -483,24 +546,11 @@ impl ImageFingerprinter {
     /// # Arguments
     /// * `image_bytes` - Raw image data
     /// * `algorithm` - Hash algorithm to use (PHash or DHash)
-    #[cfg_attr(feature = "tracing", instrument(skip(image_bytes), fields(size = image_bytes.len(), algorithm = ?algorithm)))]
     pub fn fingerprint_with(
         image_bytes: &[u8],
         algorithm: HashAlgorithm,
     ) -> Result<ImageFingerprint, ImgFprintError> {
-        #[cfg(feature = "tracing")]
-        let start = std::time::Instant::now();
-
-        let result =
-            SHARED_CTX.with(|ctx| ctx.borrow_mut().fingerprint_with(image_bytes, algorithm));
-
-        #[cfg(feature = "tracing")]
-        debug!(
-            duration_ms = start.elapsed().as_millis(),
-            "ImageFingerprinter::fingerprint_with completed"
-        );
-
-        result
+        SHARED_CTX.with(|ctx| ctx.borrow_mut().fingerprint_with(image_bytes, algorithm))
     }
 
     /// Compares two fingerprints and returns a similarity score.
@@ -547,7 +597,7 @@ impl ImageFingerprinter {
         {
             use rayon::prelude::*;
 
-            let results = images
+            let results: Vec<(S, Result<MultiHashFingerprint, ImgFprintError>)> = images
                 .par_iter()
                 .map_init(
                     || std::cell::RefCell::new(FingerprinterContext::new()),
@@ -556,9 +606,11 @@ impl ImageFingerprinter {
                 .collect();
 
             #[cfg(feature = "tracing")]
+            let (succeeded, failed) = count_results(&results);
+            #[cfg(feature = "tracing")]
             debug!(
                 duration_ms = start.elapsed().as_millis(),
-                "parallel batch completed"
+                succeeded, failed, "parallel batch completed"
             );
 
             results
@@ -566,15 +618,17 @@ impl ImageFingerprinter {
 
         #[cfg(not(feature = "parallel"))]
         {
-            let results = images
+            let results: Vec<(S, Result<MultiHashFingerprint, ImgFprintError>)> = images
                 .iter()
                 .map(|(id, bytes)| (id.clone(), Self::fingerprint(bytes)))
                 .collect();
 
             #[cfg(feature = "tracing")]
+            let (succeeded, failed) = count_results(&results);
+            #[cfg(feature = "tracing")]
             debug!(
                 duration_ms = start.elapsed().as_millis(),
-                "sequential batch completed"
+                succeeded, failed, "sequential batch completed"
             );
 
             results
@@ -597,7 +651,7 @@ impl ImageFingerprinter {
         {
             use rayon::prelude::*;
 
-            let results = images
+            let results: Vec<(S, Result<ImageFingerprint, ImgFprintError>)> = images
                 .par_iter()
                 .map_init(
                     || std::cell::RefCell::new(FingerprinterContext::new()),
@@ -611,9 +665,11 @@ impl ImageFingerprinter {
                 .collect();
 
             #[cfg(feature = "tracing")]
+            let (succeeded, failed) = count_results(&results);
+            #[cfg(feature = "tracing")]
             debug!(
                 duration_ms = start.elapsed().as_millis(),
-                "parallel batch_with completed"
+                succeeded, failed, "parallel batch_with completed"
             );
 
             results
@@ -621,15 +677,17 @@ impl ImageFingerprinter {
 
         #[cfg(not(feature = "parallel"))]
         {
-            let results = images
+            let results: Vec<(S, Result<ImageFingerprint, ImgFprintError>)> = images
                 .iter()
                 .map(|(id, bytes)| (id.clone(), Self::fingerprint_with(bytes, algorithm)))
                 .collect();
 
             #[cfg(feature = "tracing")]
+            let (succeeded, failed) = count_results(&results);
+            #[cfg(feature = "tracing")]
             debug!(
                 duration_ms = start.elapsed().as_millis(),
-                "sequential batch_with completed"
+                succeeded, failed, "sequential batch_with completed"
             );
 
             results
@@ -646,7 +704,6 @@ impl ImageFingerprinter {
     /// * `images` - Slice of (id, image_bytes) pairs
     /// * `chunk_size` - Number of images to process per chunk
     /// * `callback` - Function called with each result as (id, Result<...>)
-    #[cfg_attr(feature = "tracing", instrument(skip(images, callback), fields(chunk_size, image_count = images.len())))]
     pub fn fingerprint_batch_chunked<S, F>(images: &[(S, Vec<u8>)], chunk_size: usize, callback: F)
     where
         S: Send + Sync + Clone + 'static,
