@@ -3,7 +3,9 @@
 use crate::error::ImgFprintError;
 use fast_image_resize::images::Image;
 use fast_image_resize::{CpuExtensions, FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer};
-use image::{DynamicImage, GenericImageView, GrayImage};
+#[cfg(test)]
+use image::GrayImage;
+use image::{DynamicImage, GenericImageView};
 use std::sync::OnceLock;
 
 /// Cached CPU extensions detection to avoid repeated feature checks.
@@ -170,7 +172,25 @@ impl Preprocessor {
     /// # Errors
     ///
     /// Returns `ImgFprintError::ProcessingError` if resize or conversion fails.
+    #[cfg(test)]
     pub fn normalize(&mut self, image: &DynamicImage) -> Result<GrayImage, ImgFprintError> {
+        let gray = self.normalize_as_slice(image)?;
+
+        GrayImage::from_raw(NORMALIZED_SIZE, NORMALIZED_SIZE, gray.to_vec()).ok_or_else(|| {
+            ImgFprintError::ProcessingError("failed to create grayscale image".to_string())
+        })
+    }
+
+    /// Normalizes image to 256x256 grayscale and returns a borrowed reusable buffer.
+    ///
+    /// This is the hot-path API used by the fingerprinter. It keeps the
+    /// grayscale allocation owned by the preprocessor so repeated fingerprint
+    /// calls can reuse the same capacity instead of allocating a new 64 KiB
+    /// image buffer every time.
+    pub(crate) fn normalize_as_slice(
+        &mut self,
+        image: &DynamicImage,
+    ) -> Result<&[u8], ImgFprintError> {
         let (src_w, src_h) = image.dimensions();
 
         let rgb_img = image.to_rgb8();
@@ -222,16 +242,12 @@ impl Preprocessor {
         // Reclaim RGB buffer for reuse after grayscale conversion is complete
         self.dst_buffer = rgb_bytes;
 
-        let gray_buffer = std::mem::take(&mut self.gray_buffer);
         debug_assert_eq!(
-            gray_buffer.len(),
+            self.gray_buffer.len(),
             (NORMALIZED_SIZE * NORMALIZED_SIZE) as usize
         );
-        // Safety verified: gray_buffer.len() == NORMALIZED_SIZE^2
-        // from_raw only fails if dimensions overflow, which is impossible here.
-        GrayImage::from_raw(NORMALIZED_SIZE, NORMALIZED_SIZE, gray_buffer).ok_or_else(|| {
-            ImgFprintError::ProcessingError("failed to create grayscale image".to_string())
-        })
+
+        Ok(&self.gray_buffer)
     }
 }
 
@@ -297,11 +313,21 @@ fn rgb_to_grayscale(rgb: &[u8], gray: &mut [u8]) {
 
 /// Extracts center 32x32 region as normalized float buffer.
 #[inline]
+#[cfg(test)]
 pub fn extract_global_region(image: &GrayImage) -> [f32; (PHASH_SIZE * PHASH_SIZE) as usize] {
+    extract_global_region_from_raw(image.as_raw())
+}
+
+/// Extracts center 32x32 region from a normalized 256x256 grayscale byte buffer.
+#[inline]
+pub(crate) fn extract_global_region_from_raw(
+    pixels: &[u8],
+) -> [f32; (PHASH_SIZE * PHASH_SIZE) as usize] {
+    debug_assert_eq!(pixels.len(), (NORMALIZED_SIZE * NORMALIZED_SIZE) as usize);
+
     let start_x = (NORMALIZED_SIZE - PHASH_SIZE) / 2;
     let start_y = (NORMALIZED_SIZE - PHASH_SIZE) / 2;
     let mut buffer = [0.0f32; (PHASH_SIZE * PHASH_SIZE) as usize];
-    let pixels = image.as_raw();
     const SCALE: f32 = 1.0 / 255.0;
 
     // Optimized: process row by row with better cache locality
@@ -323,9 +349,19 @@ pub fn extract_global_region(image: &GrayImage) -> [f32; (PHASH_SIZE * PHASH_SIZ
 /// Optimized for cache locality by processing the image in a single pass
 /// and distributing pixels to their respective blocks.
 #[inline]
+#[cfg(test)]
 pub fn extract_blocks(image: &GrayImage) -> [[f32; (BLOCK_SIZE * BLOCK_SIZE) as usize]; 16] {
+    extract_blocks_from_raw(image.as_raw())
+}
+
+/// Extracts 4x4 grid of 64x64 blocks from a normalized 256x256 grayscale byte buffer.
+#[inline]
+pub(crate) fn extract_blocks_from_raw(
+    pixels: &[u8],
+) -> [[f32; (BLOCK_SIZE * BLOCK_SIZE) as usize]; 16] {
+    debug_assert_eq!(pixels.len(), (NORMALIZED_SIZE * NORMALIZED_SIZE) as usize);
+
     let mut blocks = [[0.0f32; (BLOCK_SIZE * BLOCK_SIZE) as usize]; 16];
-    let pixels = image.as_raw();
     const SCALE: f32 = 1.0 / 255.0;
 
     // Optimized: single pass through the image with better cache locality

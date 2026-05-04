@@ -6,7 +6,9 @@ use crate::hash::algorithms::HashAlgorithm;
 use crate::hash::dhash::{compute_dhash, compute_dhash_from_64x64};
 use crate::hash::phash::{compute_phash, compute_phash_from_64x64};
 use crate::imgproc::decode::{decode_image_with_config, PreprocessConfig};
-use crate::imgproc::preprocess::{extract_blocks, extract_global_region, Preprocessor};
+use crate::imgproc::preprocess::{
+    extract_blocks_from_raw, extract_global_region_from_raw, Preprocessor,
+};
 use blake3::Hasher;
 use std::cell::RefCell;
 use std::path::Path;
@@ -181,10 +183,10 @@ impl FingerprinterContext {
         let exact_hash: [u8; 32] = *self.exact_hasher.finalize().as_bytes();
 
         let image = decode_image_with_config(image_bytes, preprocess)?;
-        let normalized = self.preprocessor.normalize(&image)?;
+        let normalized = self.preprocessor.normalize_as_slice(&image)?;
 
-        let global_region = extract_global_region(&normalized);
-        let blocks = extract_blocks(&normalized);
+        let global_region = extract_global_region_from_raw(normalized);
+        let blocks = extract_blocks_from_raw(normalized);
 
         #[cfg(feature = "parallel")]
         let (ahash_fp, phash_fp, dhash_fp) = {
@@ -238,10 +240,10 @@ impl FingerprinterContext {
         let exact_hash: [u8; 32] = *self.exact_hasher.finalize().as_bytes();
 
         let image = decode_image_with_config(image_bytes, preprocess)?;
-        let normalized = self.preprocessor.normalize(&image)?;
+        let normalized = self.preprocessor.normalize_as_slice(&image)?;
 
-        let global_region = extract_global_region(&normalized);
-        let blocks = extract_blocks(&normalized);
+        let global_region = extract_global_region_from_raw(normalized);
+        let blocks = extract_blocks_from_raw(normalized);
 
         let (global_hash, block_hashes) = match algorithm {
             HashAlgorithm::AHash => Self::compute_ahash_data(&global_region, &blocks),
