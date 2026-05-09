@@ -83,7 +83,9 @@ fn dct2_32(input: &[f32], output: &mut [f32]) -> Result<(), crate::error::ImgFpr
 /// # Errors
 ///
 /// Returns `ImgFprintError::ProcessingError` if the DCT computation fails.
-pub fn compute_phash(pixels: &[f32; DCT_SIZE * DCT_SIZE]) -> Result<u64, crate::error::ImgFprintError> {
+pub fn compute_phash(
+    pixels: &[f32; DCT_SIZE * DCT_SIZE],
+) -> Result<u64, crate::error::ImgFprintError> {
     let mut row_buffer = [0.0f32; DCT_SIZE];
     let mut col_buffer = [0.0f32; DCT_SIZE * DCT_SIZE];
 
@@ -118,7 +120,9 @@ pub fn compute_phash(pixels: &[f32; DCT_SIZE * DCT_SIZE]) -> Result<u64, crate::
 
 /// Computes pHash from a 64x64 block by downsampling to 32x32 first.
 #[inline]
-pub fn compute_phash_from_64x64(block: &[f32; 64 * 64]) -> Result<u64, crate::error::ImgFprintError> {
+pub fn compute_phash_from_64x64(
+    block: &[f32; 64 * 64],
+) -> Result<u64, crate::error::ImgFprintError> {
     let mut downsampled = [0.0f32; DCT_SIZE * DCT_SIZE];
     const DOWNSAMPLE_FACTOR: f32 = 1.0 / 4.0;
 

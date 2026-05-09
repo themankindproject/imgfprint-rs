@@ -333,8 +333,7 @@ impl FingerprinterContext {
         global_region: &[f32; 32 * 32],
         blocks: &[[f32; 64 * 64]; 16],
     ) -> (u64, [u64; 16]) {
-        let global_hash = compute_phash(global_region)
-            .unwrap_or(0);
+        let global_hash = compute_phash(global_region).unwrap_or(0);
 
         let block_hashes = {
             let mut hashes = [0u64; 16];
