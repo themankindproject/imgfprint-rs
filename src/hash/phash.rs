@@ -79,7 +79,11 @@ fn dct2_32(input: &[f32], output: &mut [f32]) -> Result<(), crate::error::ImgFpr
 /// to generate a 64-bit hash. The algorithm is robust to minor visual changes.
 ///
 /// Pixel values should be in range [0.0, 1.0].
-pub fn compute_phash(pixels: &[f32; DCT_SIZE * DCT_SIZE]) -> u64 {
+///
+/// # Errors
+///
+/// Returns `ImgFprintError::ProcessingError` if the DCT computation fails.
+pub fn compute_phash(pixels: &[f32; DCT_SIZE * DCT_SIZE]) -> Result<u64, crate::error::ImgFprintError> {
     let mut row_buffer = [0.0f32; DCT_SIZE];
     let mut col_buffer = [0.0f32; DCT_SIZE * DCT_SIZE];
 
@@ -87,11 +91,7 @@ pub fn compute_phash(pixels: &[f32; DCT_SIZE * DCT_SIZE]) -> u64 {
     for row in 0..DCT_SIZE {
         let start = row * DCT_SIZE;
         row_buffer.copy_from_slice(&pixels[start..start + DCT_SIZE]);
-        // Safety: dct2_32 operates on fixed-size inputs (32 elements) with a cached
-        // FFT plan. It can only fail if the FFT process call fails, which cannot
-        // happen with the correct buffer sizes established by our const assertions.
-        dct2_32(&row_buffer, &mut col_buffer[start..start + DCT_SIZE])
-            .expect("DCT failed on fixed-size input - indicates corrupted FFT plan");
+        dct2_32(&row_buffer, &mut col_buffer[start..start + DCT_SIZE])?;
     }
 
     // Column-wise DCT (transpose then DCT rows)
@@ -105,9 +105,7 @@ pub fn compute_phash(pixels: &[f32; DCT_SIZE * DCT_SIZE]) -> u64 {
             col_input[row] = col_buffer[row * DCT_SIZE + col];
         }
 
-        // Safety: same as above - fixed-size inputs with cached plan
-        dct2_32(&col_input, &mut col_output)
-            .expect("DCT failed on fixed-size input - indicates corrupted FFT plan");
+        dct2_32(&col_input, &mut col_output)?;
 
         // Store only top HASH_SIZE rows
         for row in 0..HASH_SIZE {
@@ -115,12 +113,12 @@ pub fn compute_phash(pixels: &[f32; DCT_SIZE * DCT_SIZE]) -> u64 {
         }
     }
 
-    compute_hash_from_coeffs(&hash_matrix)
+    Ok(compute_hash_from_coeffs(&hash_matrix))
 }
 
 /// Computes pHash from a 64x64 block by downsampling to 32x32 first.
 #[inline]
-pub fn compute_phash_from_64x64(block: &[f32; 64 * 64]) -> u64 {
+pub fn compute_phash_from_64x64(block: &[f32; 64 * 64]) -> Result<u64, crate::error::ImgFprintError> {
     let mut downsampled = [0.0f32; DCT_SIZE * DCT_SIZE];
     const DOWNSAMPLE_FACTOR: f32 = 1.0 / 4.0;
 
@@ -203,8 +201,8 @@ mod tests {
     #[test]
     fn test_phash_deterministic() {
         let img: [f32; 32 * 32] = std::array::from_fn(|i| ((i % 256) as f32) / 255.0);
-        let h1 = compute_phash(&img);
-        let h2 = compute_phash(&img);
+        let h1 = compute_phash(&img).unwrap();
+        let h2 = compute_phash(&img).unwrap();
         assert_eq!(h1, h2);
     }
 
@@ -220,29 +218,29 @@ mod tests {
             let y = i / 32;
             ((x + y) * 7 % 256) as f32 / 255.0
         });
-        let h1 = compute_phash(&img1);
-        let h2 = compute_phash(&img2);
+        let h1 = compute_phash(&img1).unwrap();
+        let h2 = compute_phash(&img2).unwrap();
         assert_ne!(h1, h2);
     }
 
     #[test]
     fn test_phash_uniform_image() {
         let img: [f32; 32 * 32] = [0.5; 32 * 32];
-        let hash = compute_phash(&img);
+        let hash = compute_phash(&img).unwrap();
         assert_ne!(hash, 0);
     }
 
     #[test]
     fn test_phash_all_zeros() {
         let img: [f32; 32 * 32] = [0.0; 32 * 32];
-        let hash = compute_phash(&img);
+        let hash = compute_phash(&img).unwrap();
         assert_ne!(hash, 0);
     }
 
     #[test]
     fn test_phash_all_ones() {
         let img: [f32; 32 * 32] = [1.0; 32 * 32];
-        let hash = compute_phash(&img);
+        let hash = compute_phash(&img).unwrap();
         assert_ne!(hash, 0);
     }
 
@@ -254,7 +252,7 @@ mod tests {
                 img[y * 32 + x] = x as f32 / 31.0;
             }
         }
-        let hash = compute_phash(&img);
+        let hash = compute_phash(&img).unwrap();
         assert_ne!(hash, 0);
     }
 
@@ -266,7 +264,7 @@ mod tests {
                 img[y * 32 + x] = y as f32 / 31.0;
             }
         }
-        let hash = compute_phash(&img);
+        let hash = compute_phash(&img).unwrap();
         assert_ne!(hash, 0);
     }
 
@@ -277,15 +275,15 @@ mod tests {
             let y = i / 64;
             ((x.wrapping_mul(y)) % 256) as f32 / 255.0
         });
-        let hash = compute_phash_from_64x64(&block);
+        let hash = compute_phash_from_64x64(&block).unwrap();
         assert_ne!(hash, 0);
     }
 
     #[test]
     fn test_phash_from_64x64_deterministic() {
         let block: [f32; 64 * 64] = std::array::from_fn(|i| (i % 256) as f32 / 255.0);
-        let h1 = compute_phash_from_64x64(&block);
-        let h2 = compute_phash_from_64x64(&block);
+        let h1 = compute_phash_from_64x64(&block).unwrap();
+        let h2 = compute_phash_from_64x64(&block).unwrap();
         assert_eq!(h1, h2);
     }
 
@@ -294,7 +292,7 @@ mod tests {
         let mut img = [0.5f32; 32 * 32];
         img[0] = f32::NAN;
         img[10] = f32::NAN;
-        let hash = compute_phash(&img);
+        let hash = compute_phash(&img).unwrap();
         assert_eq!(hash, 0);
     }
 
@@ -302,7 +300,7 @@ mod tests {
     fn test_phash_with_infinity_values() {
         let mut img = [0.5f32; 32 * 32];
         img[0] = f32::INFINITY;
-        let hash = compute_phash(&img);
+        let hash = compute_phash(&img).unwrap();
         assert_eq!(hash, 0);
     }
 
@@ -314,7 +312,7 @@ mod tests {
                 img[y * 32 + x] = if (x + y) % 2 == 0 { 0.0 } else { 1.0 };
             }
         }
-        let hash = compute_phash(&img);
+        let hash = compute_phash(&img).unwrap();
         assert_ne!(hash, 0);
     }
 
@@ -328,8 +326,8 @@ mod tests {
             img2[i] = (i % 128 + 2) as f32 / 255.0;
         }
 
-        let h1 = compute_phash(&img1);
-        let h2 = compute_phash(&img2);
+        let h1 = compute_phash(&img1).unwrap();
+        let h2 = compute_phash(&img2).unwrap();
         let distance = (h1 ^ h2).count_ones();
         assert!(
             distance < 32,

@@ -193,8 +193,11 @@ impl Preprocessor {
     ) -> Result<&[u8], ImgFprintError> {
         let (src_w, src_h) = image.dimensions();
 
-        let rgb_img = image.to_rgb8();
-        let src_data = rgb_img.into_raw();
+        // Avoid allocation when image is already RGB8
+        let src_data = match image {
+            DynamicImage::ImageRgb8(rgb) => rgb.as_raw().clone(),
+            _ => image.to_rgb8().into_raw(),
+        };
 
         let src = Image::from_vec_u8(src_w, src_h, src_data, PixelType::U8x3)
             .map_err(|e| ImgFprintError::ProcessingError(format!("invalid source image: {}", e)))?;

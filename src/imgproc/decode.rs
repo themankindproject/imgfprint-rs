@@ -3,7 +3,7 @@
 use crate::error::ImgFprintError;
 use exif::{In, Reader, Tag};
 use image::{DynamicImage, GenericImageView};
-use std::io::Cursor;
+use std::io::Cursor; // used by read_exif_orientation
 
 /// Default maximum image edge length, in pixels. Beyond this, decode is rejected.
 pub const DEFAULT_MAX_DIMENSION: u32 = 8192;
@@ -111,25 +111,6 @@ pub fn decode_image_with_config(
         )));
     }
 
-    let reader = image::ImageReader::new(Cursor::new(image_bytes))
-        .with_guessed_format()
-        .map_err(|e| ImgFprintError::decode_error(format!("format detection failed: {}", e)))?;
-
-    if let Ok((width, height)) = reader.into_dimensions() {
-        if width > config.max_dimension || height > config.max_dimension {
-            return Err(ImgFprintError::invalid_image(format!(
-                "dimensions {}x{} exceed limit {}x{}",
-                width, height, config.max_dimension, config.max_dimension
-            )));
-        }
-        if width < config.min_dimension || height < config.min_dimension {
-            return Err(ImgFprintError::image_too_small(format!(
-                "dimensions {}x{} are below minimum {}x{}",
-                width, height, config.min_dimension, config.min_dimension
-            )));
-        }
-    }
-
     let image = image::load_from_memory(image_bytes).map_err(|e| match e {
         image::ImageError::Unsupported(format) => {
             ImgFprintError::UnsupportedFormat(format!("{:?}", format))
@@ -146,6 +127,20 @@ pub fn decode_image_with_config(
         }
         other => ImgFprintError::ProcessingError(format!("image processing error: {}", other)),
     })?;
+
+    let (width, height) = image.dimensions();
+    if width > config.max_dimension || height > config.max_dimension {
+        return Err(ImgFprintError::invalid_image(format!(
+            "dimensions {}x{} exceed limit {}x{}",
+            width, height, config.max_dimension, config.max_dimension
+        )));
+    }
+    if width < config.min_dimension || height < config.min_dimension {
+        return Err(ImgFprintError::image_too_small(format!(
+            "dimensions {}x{} are below minimum {}x{}",
+            width, height, config.min_dimension, config.min_dimension
+        )));
+    }
 
     let orientation = read_exif_orientation(image_bytes);
     let oriented_image = apply_orientation_transform(image, orientation);

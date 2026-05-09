@@ -333,23 +333,13 @@ impl FingerprinterContext {
         global_region: &[f32; 32 * 32],
         blocks: &[[f32; 64 * 64]; 16],
     ) -> (u64, [u64; 16]) {
-        let global_hash = compute_phash(global_region);
+        let global_hash = compute_phash(global_region)
+            .unwrap_or(0);
 
-        #[cfg(feature = "parallel")]
-        let block_hashes = {
-            use rayon::prelude::*;
-            let mut hashes = [0u64; 16];
-            hashes.par_iter_mut().enumerate().for_each(|(i, hash)| {
-                *hash = compute_phash_from_64x64(&blocks[i]);
-            });
-            hashes
-        };
-
-        #[cfg(not(feature = "parallel"))]
         let block_hashes = {
             let mut hashes = [0u64; 16];
             for (i, block) in blocks.iter().enumerate() {
-                hashes[i] = compute_phash_from_64x64(block);
+                hashes[i] = compute_phash_from_64x64(block).unwrap_or(0);
             }
             hashes
         };
@@ -363,26 +353,12 @@ impl FingerprinterContext {
     ) -> (u64, [u64; 16]) {
         let global_hash = compute_ahash(global_region);
 
-        #[cfg(feature = "parallel")]
-        let block_hashes = {
-            use rayon::prelude::*;
-            let mut hashes = [0u64; 16];
-            hashes.par_iter_mut().enumerate().for_each(|(i, hash)| {
-                *hash = compute_ahash_from_64x64(&blocks[i]);
-            });
-            hashes
-        };
+        let mut hashes = [0u64; 16];
+        for (i, block) in blocks.iter().enumerate() {
+            hashes[i] = compute_ahash_from_64x64(block);
+        }
 
-        #[cfg(not(feature = "parallel"))]
-        let block_hashes = {
-            let mut hashes = [0u64; 16];
-            for (i, block) in blocks.iter().enumerate() {
-                hashes[i] = compute_ahash_from_64x64(block);
-            }
-            hashes
-        };
-
-        (global_hash, block_hashes)
+        (global_hash, hashes)
     }
 
     fn compute_dhash_data(
@@ -391,26 +367,12 @@ impl FingerprinterContext {
     ) -> (u64, [u64; 16]) {
         let global_dhash = compute_dhash(global_region);
 
-        #[cfg(feature = "parallel")]
-        let block_hashes = {
-            use rayon::prelude::*;
-            let mut hashes = [0u64; 16];
-            hashes.par_iter_mut().enumerate().for_each(|(i, hash)| {
-                *hash = compute_dhash_from_64x64(&blocks[i]);
-            });
-            hashes
-        };
+        let mut hashes = [0u64; 16];
+        for (i, block) in blocks.iter().enumerate() {
+            hashes[i] = compute_dhash_from_64x64(block);
+        }
 
-        #[cfg(not(feature = "parallel"))]
-        let block_hashes = {
-            let mut hashes = [0u64; 16];
-            for (i, block) in blocks.iter().enumerate() {
-                hashes[i] = compute_dhash_from_64x64(block);
-            }
-            hashes
-        };
-
-        (global_dhash, block_hashes)
+        (global_dhash, hashes)
     }
 
     /// Computes fingerprints for multiple images in chunks to limit memory usage.
