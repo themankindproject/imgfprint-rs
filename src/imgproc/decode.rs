@@ -103,6 +103,13 @@ pub fn decode_image_with_config(
         return Err(ImgFprintError::invalid_image("empty input"));
     }
 
+    if config.min_dimension > config.max_dimension {
+        return Err(ImgFprintError::invalid_image(format!(
+            "invalid config: min_dimension ({}) > max_dimension ({})",
+            config.min_dimension, config.max_dimension
+        )));
+    }
+
     if image_bytes.len() > config.max_input_bytes {
         return Err(ImgFprintError::invalid_image(format!(
             "input too large: {} bytes exceeds limit of {} bytes",

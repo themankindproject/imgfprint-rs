@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Optimized RGB conversion in preprocessing**: `normalize_as_slice()` now skips the `to_rgb8()` conversion allocation when the decoded image is already `ImageRgb8` (common for JPEG inputs).
 
+- **Reject zero-norm embedding vectors at construction**: `Embedding::new()` now returns `InvalidEmbedding` for all-zero vectors instead of deferring the error to `semantic_similarity()`.
+
+- **Added `Display` impl for `HashAlgorithm`**: Enables `format!("{}", algo)` without requiring `Debug` formatting.
+
+- **Added `PartialOrd` impl for `Similarity`**: Enables sorting similarity results by score (e.g., `results.sort_by(|a, b| a.partial_cmp(b).unwrap())`).
+
+- **`PreprocessConfig` validation**: `decode_image_with_config()` now rejects configs where `min_dimension > max_dimension` with a clear error instead of producing confusing downstream failures.
+
 - **Improved fingerprinting hot-path buffer reuse**: `FingerprinterContext` now keeps the normalized 256x256 grayscale buffer owned by the preprocessor during fingerprinting instead of moving it into a temporary `GrayImage`. This avoids a repeated 64 KiB allocation/copy pattern in repeated and batch fingerprinting without changing hash semantics or public APIs.
 
 - **Refined optional `tracing` instrumentation**: Removed duplicate wrapper-level spans from static convenience methods, added stage-level timing events for exact hash, decode, normalize, region extraction, block extraction, and hash computation, and added success/failure counts to batch tracing events.

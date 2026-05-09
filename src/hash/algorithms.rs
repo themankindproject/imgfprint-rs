@@ -28,6 +28,16 @@ pub enum HashAlgorithm {
     DHash,
 }
 
+impl std::fmt::Display for HashAlgorithm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HashAlgorithm::AHash => f.write_str("AHash"),
+            HashAlgorithm::PHash => f.write_str("PHash"),
+            HashAlgorithm::DHash => f.write_str("DHash"),
+        }
+    }
+}
+
 impl HashAlgorithm {
     /// Returns the bit length of hashes produced by this algorithm.
     #[must_use]

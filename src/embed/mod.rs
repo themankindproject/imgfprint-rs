@@ -133,6 +133,12 @@ impl Embedding {
             ));
         }
 
+        if vector.iter().all(|&v| v == 0.0) {
+            return Err(ImgFprintError::InvalidEmbedding(
+                "embedding vector is all zeros (zero-norm)".to_string(),
+            ));
+        }
+
         Ok(Self { vector, model_id })
     }
 
@@ -533,20 +539,10 @@ mod tests {
 
     #[test]
     fn test_cosine_similarity_zero_vector() {
-        let a = emb(vec![1.0, 0.0, 0.0]);
-        let _b = emb(vec![0.0, 0.0, 0.0]);
-
-        // We need to bypass the normal constructor to create a zero vector
-        // Since Embedding::new validates against this, we manually construct
-        let zero_embedding = Embedding {
-            vector: vec![0.0; 3],
-            model_id: None,
-        };
-
-        let result = semantic_similarity(&a, &zero_embedding);
+        let result = Embedding::new(vec![0.0, 0.0, 0.0]);
         assert!(matches!(
             result,
-            Err(ImgFprintError::InvalidEmbedding(msg)) if msg.contains("zero vector")
+            Err(ImgFprintError::InvalidEmbedding(msg)) if msg.contains("zero")
         ));
     }
 

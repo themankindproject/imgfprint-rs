@@ -70,6 +70,12 @@ impl Similarity {
     }
 }
 
+impl PartialOrd for Similarity {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.score.partial_cmp(&other.score)
+    }
+}
+
 /// Computes similarity between two fingerprints.
 ///
 /// Uses a weighted combination:
