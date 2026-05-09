@@ -7,16 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- **Eliminated double image decode** in `decode_image_with_config()`: Previously called `into_dimensions()` (which decodes the header) followed by `load_from_memory()` (which decodes the full image again). Now decodes once and validates dimensions from the decoded `DynamicImage`. ~30-40% latency reduction on the decode path.
-
-- **Removed `expect()` panics from PHash**: `compute_phash()` and `compute_phash_from_64x64()` now return `Result<u64, ImgFprintError>` instead of panicking on DCT failures. The library now truly upholds its "no panics on malformed input" guarantee.
-
-- **Removed block-level rayon parallelism**: The 16 per-block hash computations within each algorithm are now sequential. The outer algorithm-level `rayon::join` (AHash/PHash/DHash) is preserved. Eliminates ~48 rayon task spawns per fingerprint that cost more in scheduling overhead than they saved in compute.
-
-- **Optimized RGB conversion in preprocessing**: `normalize_as_slice()` now skips the `to_rgb8()` conversion allocation when the decoded image is already `ImageRgb8` (common for JPEG inputs).
-
 ## [0.4.2] - 2026-05-04
 
 ### Added
@@ -26,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Feature-combination CI coverage**: Added CI coverage for no-default builds and individual `serde`, `parallel`, and `tracing` feature combinations so optional-feature regressions are caught before release.
 
 ### Changed
+
+- **Eliminated double image decode** in `decode_image_with_config()`: Previously called `into_dimensions()` (which decodes the header) followed by `load_from_memory()` (which decodes the full image again). Now decodes once and validates dimensions from the decoded `DynamicImage`. ~30-40% latency reduction on the decode path.
+
+- **Removed `expect()` panics from PHash**: `compute_phash()` and `compute_phash_from_64x64()` now return `Result<u64, ImgFprintError>` instead of panicking on DCT failures. The library now truly upholds its "no panics on malformed input" guarantee.
+
+- **Removed block-level rayon parallelism**: The 16 per-block hash computations within each algorithm are now sequential. The outer algorithm-level `rayon::join` (AHash/PHash/DHash) is preserved. Eliminates ~48 rayon task spawns per fingerprint that cost more in scheduling overhead than they saved in compute.
+
+- **Optimized RGB conversion in preprocessing**: `normalize_as_slice()` now skips the `to_rgb8()` conversion allocation when the decoded image is already `ImageRgb8` (common for JPEG inputs).
 
 - **Improved fingerprinting hot-path buffer reuse**: `FingerprinterContext` now keeps the normalized 256x256 grayscale buffer owned by the preprocessor during fingerprinting instead of moving it into a temporary `GrayImage`. This avoids a repeated 64 KiB allocation/copy pattern in repeated and batch fingerprinting without changing hash semantics or public APIs.
 
