@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`fingerprint_image(&DynamicImage)` API**: New method on both `ImageFingerprinter` and `FingerprinterContext` that accepts an already-decoded `DynamicImage` directly, skipping the decode step entirely. Useful for video frames or in-memory compositions. `image::DynamicImage` is re-exported from the crate root.
+
+- **`Display` impl for `ImageFingerprint` and `MultiHashFingerprint`**: Enables `format!("{}", fp)` for logging and string serialization. `ImageFingerprint` formats as `exact_hex:global_hex:block0,block1,...,block15`. `MultiHashFingerprint` formats as `exact_hex|ahash_global|phash_global|dhash_global`.
+
+- **`fingerprint_stream()` streaming batch API**: New `ImageFingerprinter::fingerprint_stream(paths)` accepts any iterator of paths and returns a lazy iterator of `(path, Result)` pairs. Reads and fingerprints one image at a time with zero upfront memory, using a single `FingerprinterContext` internally for buffer reuse.
+
+- **`no_std`-compatible comparison layer**: The `similarity` module (`Similarity`, `compute_similarity`, `hamming_distance`, `hash_similarity`) now uses only `core` primitives and the `subtle` crate. Consumers that only need to compare pre-computed fingerprints (embedded targets, WASM) can use the comparison types without `std`.
+
+### Changed
+
+- **Fixed `perceptual_distance` overflow with custom weights**: `MultiHashFingerprint::compare_with_config()` now normalizes the weighted distance by the sum of algorithm weights, keeping the value bounded to [0, 64] regardless of weight configuration. Previously, non-unit weight sums could produce distances exceeding 64.
+
+- **Early dimension rejection before full decode**: `decode_image_with_config()` now reads image dimensions via `ImageReader::into_dimensions()` before performing the full decode. Oversized or undersized images are rejected without allocating the full pixel buffer.
+
+- **Eliminated double-resample in block hashing**: `compute_ahash_from_64x64` and `compute_dhash_from_64x64` now resample directly from 64×64 to 8×8 / 9×8 in a single pass instead of the previous 64→32→8 two-pass approach. Eliminates 32 intermediate buffer allocations and bilinear passes per multi-hash fingerprint.
+
+- **Zero-copy source image in preprocessing**: `normalize_as_slice()` now uses `ImageRef` (borrowed) for RGB8 images instead of cloning the entire pixel buffer. Non-RGB8 images still convert as before.
+
+- **Removed redundant constant-time comparisons in multi-hash scoring**: Extracted `compute_score_only()` internal helper. `compare_with_config()` no longer performs 3 redundant `ct_eq` exact-hash comparisons on sub-fingerprints (the outer check already handles it).
+
+- **Fixed `ImageFingerprint::is_similar` to use block hashes**: Now uses the full weighted similarity formula (40% global + 60% block hashes) instead of only the global hash distance. Consistent with `MultiHashFingerprint::is_similar` behavior. May change threshold behavior for callers relying on the old global-only comparison.
+
+### Notes
+
+- No fingerprint format, binary layout, or hash semantic changes. `FORMAT_VERSION` remains `1`.
+
 ## [0.4.2] - 2026-05-10
 
 ### Added

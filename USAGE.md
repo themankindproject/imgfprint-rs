@@ -419,6 +419,20 @@ let hash: u64 = fp.global_hash();
 println!("Perceptual hash: {:016x}", hash);
 ```
 
+#### Display Formatting
+
+Both `ImageFingerprint` and `MultiHashFingerprint` implement `Display` for easy logging and serialization to strings:
+
+```rust
+let fp = ImageFingerprinter::fingerprint_with(&img, HashAlgorithm::PHash)?;
+// Format: exact_hex:global_hex:block0,block1,...,block15
+println!("{}", fp);
+
+let multi = ImageFingerprinter::fingerprint(&img)?;
+// Format: exact_hex|ahash_global|phash_global|dhash_global
+println!("{}", multi);
+```
+
 ##### `block_hashes()`
 
 ```rust
@@ -472,7 +486,7 @@ Checks if this fingerprint is similar to another within a threshold.
 - `other`: Fingerprint to compare against
 - `threshold`: Similarity threshold 0.0 to 1.0
 
-**Note:** Out-of-range or NaN thresholds are clamped to [0.0, 1.0] (returns `false` if clamped to 0.0). Panics in debug mode to help catch bugs during development.
+**Note:** Uses the full weighted similarity (40% global + 60% block hashes) for consistency with `MultiHashFingerprint`. Out-of-range or NaN thresholds are clamped to [0.0, 1.0] (returns `false` if clamped to 0.0). Panics in debug mode to help catch bugs during development.
 
 **Example:**
 ```rust
@@ -775,6 +789,27 @@ fn process_chunked(image_paths: &[&Path]) -> Result<usize, Box<dyn std::error::E
 
 **Benefit:** Bounded memory usage (100 images max), callback enables immediate processing/streaming results.
 
+#### Strategy 4: Streaming Iterator (Best for Disk-Based Pipelines)
+
+Lazily reads and fingerprints images one at a time from an iterator of paths. No need to load all images into memory:
+
+```rust
+use imgfprint::ImageFingerprinter;
+use std::path::PathBuf;
+
+fn process_streaming(paths: Vec<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+    for (path, result) in ImageFingerprinter::fingerprint_stream(paths.into_iter()) {
+        match result {
+            Ok(fp) => println!("{}: {}", path.display(), fp),
+            Err(e) => eprintln!("{}: {}", path.display(), e),
+        }
+    }
+    Ok(())
+}
+```
+
+**Benefit:** Zero upfront memory — each image is read, fingerprinted, and dropped before the next. Uses a single `FingerprinterContext` internally for buffer reuse.
+
 ### Semantic Embeddings
 
 Work with CLIP-style semantic embeddings (requires custom provider implementation).
@@ -1001,6 +1036,10 @@ Supported formats: PNG, JPEG, GIF, WebP, BMP
 | Optimal | 256x512 to 1024x1024 | Best performance |
 
 **Note:** Larger images are downscaled to 256x256 internally, so feeding very large images wastes decode time.
+
+### 6. `no_std` Comparison Layer
+
+The similarity computation module (`Similarity`, `compute_similarity`, `hamming_distance`, `hash_similarity`) uses only `core` primitives and the `subtle` crate — both `no_std`-compatible. If you only need to *compare* pre-computed fingerprints (e.g., on an embedded target or in a WASM module), the comparison types work without `std`.
 
 ---
 
