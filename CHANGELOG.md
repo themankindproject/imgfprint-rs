@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`PreprocessConfig` validation**: `decode_image_with_config()` now rejects configs where `min_dimension > max_dimension` with a clear error instead of producing confusing downstream failures.
 
+- **Documented `subtle` crate rationale**: Added inline documentation explaining why constant-time comparison is used for BLAKE3 hash equality (defense-in-depth for network-exposed fingerprint checks).
+
+- **Removed dead `local-embedding-model` feature flag**: Was just an alias for `local-embedding` with no additional gating.
+
 - **Improved fingerprinting hot-path buffer reuse**: `FingerprinterContext` now keeps the normalized 256x256 grayscale buffer owned by the preprocessor during fingerprinting instead of moving it into a temporary `GrayImage`. This avoids a repeated 64 KiB allocation/copy pattern in repeated and batch fingerprinting without changing hash semantics or public APIs.
 
 - **Refined optional `tracing` instrumentation**: Removed duplicate wrapper-level spans from static convenience methods, added stage-level timing events for exact hash, decode, normalize, region extraction, block extraction, and hash computation, and added success/failure counts to batch tracing events.
