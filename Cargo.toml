@@ -39,7 +39,6 @@ default = ["serde", "parallel"]
 serde = ["dep:serde"]
 parallel = ["dep:rayon"]
 local-embedding = ["dep:tract-onnx"]
-local-embedding-model = ["local-embedding"]
 tracing = ["dep:tracing"]
 
 [dev-dependencies]

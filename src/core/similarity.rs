@@ -1,6 +1,13 @@
 use crate::core::fingerprint::ImageFingerprint;
 use subtle::ConstantTimeEq;
 
+// NOTE: We use `subtle::ConstantTimeEq` for BLAKE3 hash comparison to prevent
+// timing side-channels that could leak information about which bytes of two
+// fingerprints match. While BLAKE3 hashes are derived from public image content,
+// constant-time comparison is a defense-in-depth measure for deployments where
+// fingerprint equality checks are exposed over a network boundary (e.g., API
+// endpoints that return "duplicate" vs "not duplicate").
+
 /// Default maximum Hamming distance for a block to be considered a valid match.
 ///
 /// Blocks with distance above this threshold are excluded from the similarity
