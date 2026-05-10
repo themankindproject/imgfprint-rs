@@ -25,15 +25,12 @@ pub fn compute_dhash(pixels: &[f32; 32 * 32]) -> u64 {
     compute_hash_from_gradient(&small)
 }
 
-/// Computes dHash from a 64x64 block by downsampling to 9x8 first.
+/// Computes dHash from a 64x64 block by downsampling directly to 9x8.
 #[inline]
 pub fn compute_dhash_from_64x64(block: &[f32; 64 * 64]) -> u64 {
-    let mut downsampled = [0.0f32; 32 * 32];
-
-    // First downsample 64x64 to 32x32 using bilinear resampling
-    bilinear_resample(block, 64, 64, &mut downsampled, 32, 32);
-
-    compute_dhash(&downsampled)
+    let mut small = [0.0f32; DHASH_SIZE];
+    bilinear_resample(block, 64, 64, &mut small, DHASH_WIDTH, DHASH_HEIGHT);
+    compute_hash_from_gradient(&small)
 }
 
 /// Computes hash by comparing adjacent pixels horizontally.

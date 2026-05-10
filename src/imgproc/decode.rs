@@ -118,6 +118,24 @@ pub fn decode_image_with_config(
         )));
     }
 
+    // Early dimension check without full decode to reject oversized images cheaply
+    if let Ok(reader) = image::ImageReader::new(Cursor::new(image_bytes)).with_guessed_format() {
+        if let Ok((w, h)) = reader.into_dimensions() {
+            if w > config.max_dimension || h > config.max_dimension {
+                return Err(ImgFprintError::invalid_image(format!(
+                    "dimensions {}x{} exceed limit {}x{}",
+                    w, h, config.max_dimension, config.max_dimension
+                )));
+            }
+            if w < config.min_dimension || h < config.min_dimension {
+                return Err(ImgFprintError::image_too_small(format!(
+                    "dimensions {}x{} are below minimum {}x{}",
+                    w, h, config.min_dimension, config.min_dimension
+                )));
+            }
+        }
+    }
+
     let image = image::load_from_memory(image_bytes).map_err(|e| match e {
         image::ImageError::Unsupported(format) => {
             ImgFprintError::UnsupportedFormat(format!("{:?}", format))

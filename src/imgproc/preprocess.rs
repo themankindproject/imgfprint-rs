@@ -1,7 +1,7 @@
 //! Image preprocessing and normalization with SIMD-accelerated resize.
 
 use crate::error::ImgFprintError;
-use fast_image_resize::images::Image;
+use fast_image_resize::images::{Image, ImageRef};
 use fast_image_resize::{CpuExtensions, FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer};
 #[cfg(test)]
 use image::GrayImage;
@@ -193,17 +193,7 @@ impl Preprocessor {
     ) -> Result<&[u8], ImgFprintError> {
         let (src_w, src_h) = image.dimensions();
 
-        // Avoid allocation when image is already RGB8
-        let src_data = match image {
-            DynamicImage::ImageRgb8(rgb) => rgb.as_raw().clone(),
-            _ => image.to_rgb8().into_raw(),
-        };
-
-        let src = Image::from_vec_u8(src_w, src_h, src_data, PixelType::U8x3)
-            .map_err(|e| ImgFprintError::ProcessingError(format!("invalid source image: {}", e)))?;
-
         // Reuse destination buffer to avoid allocation
-        // Use resize instead of unsafe set_len to ensure initialization
         self.dst_buffer.clear();
         let target_len = (NORMALIZED_SIZE * NORMALIZED_SIZE * 3) as usize;
         self.dst_buffer.resize(target_len, 0u8);
@@ -224,16 +214,27 @@ impl Preprocessor {
             ..Default::default()
         };
 
-        self.resizer
-            .resize(&src, &mut dst, &options)
-            .map_err(|e| ImgFprintError::ProcessingError(format!("resize failed: {}", e)))?;
+        // Use borrowed ImageRef for RGB8 to avoid allocation; convert otherwise
+        let rgb_owned;
+        match image {
+            DynamicImage::ImageRgb8(rgb) => {
+                let src = ImageRef::new(src_w, src_h, rgb.as_raw(), PixelType::U8x3)
+                    .map_err(|e| ImgFprintError::ProcessingError(format!("invalid source image: {}", e)))?;
+                self.resizer.resize(&src, &mut dst, &options)
+                    .map_err(|e| ImgFprintError::ProcessingError(format!("resize failed: {}", e)))?;
+            }
+            _ => {
+                rgb_owned = image.to_rgb8().into_raw();
+                let src = Image::from_vec_u8(src_w, src_h, rgb_owned, PixelType::U8x3)
+                    .map_err(|e| ImgFprintError::ProcessingError(format!("invalid source image: {}", e)))?;
+                self.resizer.resize(&src, &mut dst, &options)
+                    .map_err(|e| ImgFprintError::ProcessingError(format!("resize failed: {}", e)))?;
+            }
+        }
 
-        // Convert to grayscale BEFORE reclaiming the buffer
-        // This avoids the bug where we reclaim dst_buffer before using it
         let rgb_bytes = dst.into_vec();
 
         // Reuse grayscale buffer
-        // Use resize instead of unsafe set_len to ensure initialization
         self.gray_buffer.clear();
         let gray_target_len = (NORMALIZED_SIZE * NORMALIZED_SIZE) as usize;
         self.gray_buffer.resize(gray_target_len, 0u8);

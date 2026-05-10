@@ -23,15 +23,12 @@ pub fn compute_ahash(pixels: &[f32; 32 * 32]) -> u64 {
     compute_hash_from_mean(&small)
 }
 
-/// Computes AHash from a 64x64 block by downsampling to 8x8 first.
+/// Computes AHash from a 64x64 block by downsampling directly to 8x8.
 #[inline]
 pub fn compute_ahash_from_64x64(block: &[f32; 64 * 64]) -> u64 {
-    let mut downsampled = [0.0f32; 32 * 32];
-
-    // First downsample 64x64 to 32x32 using bilinear resampling
-    bilinear_resample(block, 64, 64, &mut downsampled, 32, 32);
-
-    compute_ahash(&downsampled)
+    let mut small = [0.0f32; TOTAL_PIXELS];
+    bilinear_resample(block, 64, 64, &mut small, AHASH_SIZE, AHASH_SIZE);
+    compute_hash_from_mean(&small)
 }
 
 /// Computes hash by comparing each pixel to the mean brightness.
