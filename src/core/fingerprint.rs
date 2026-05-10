@@ -1,4 +1,4 @@
-use crate::core::similarity::{hash_similarity, Similarity};
+use crate::core::similarity::Similarity;
 use crate::hash::algorithms::HashAlgorithm;
 
 /// Default weight for `AHash` in the combined score (10%).
@@ -204,11 +204,27 @@ impl ImageFingerprint {
         if self.exact == other.exact {
             return true;
         }
-        // Clamp threshold to valid range for release builds to handle NaN/out-of-range gracefully
         let clamped_threshold = threshold.clamp(0.0, 1.0);
-        let dist = self.distance(other);
-        let similarity = hash_similarity(dist);
-        similarity >= clamped_threshold
+        let sim = crate::core::similarity::compute_similarity(self, other);
+        sim.score >= clamped_threshold
+    }
+}
+
+impl core::fmt::Display for ImageFingerprint {
+    /// Formats the fingerprint as hex: `exact:global:block0,block1,...,block15`
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Exact hash as hex
+        for byte in &self.exact {
+            write!(f, "{:02x}", byte)?;
+        }
+        write!(f, ":{:016x}:", self.global_hash)?;
+        for (i, h) in self.block_hashes.iter().enumerate() {
+            if i > 0 {
+                write!(f, ",")?;
+            }
+            write!(f, "{:016x}", h)?;
+        }
+        Ok(())
     }
 }
 
@@ -362,7 +378,7 @@ impl MultiHashFingerprint {
         other: &MultiHashFingerprint,
         config: &MultiHashConfig,
     ) -> Similarity {
-        use crate::core::similarity::{compute_similarity_with_weights, hamming_distance};
+        use crate::core::similarity::{compute_score_only, hamming_distance};
         use subtle::ConstantTimeEq;
 
         let exact_match = self.exact.ct_eq(&other.exact).into();
@@ -375,30 +391,27 @@ impl MultiHashFingerprint {
             };
         }
 
-        let ahash_sim = compute_similarity_with_weights(
+        let ahash_sim = compute_score_only(
             &self.ahash,
             &other.ahash,
             config.global_weight,
             config.block_weight,
             config.block_distance_threshold,
-        )
-        .score;
-        let phash_sim = compute_similarity_with_weights(
+        );
+        let phash_sim = compute_score_only(
             &self.phash,
             &other.phash,
             config.global_weight,
             config.block_weight,
             config.block_distance_threshold,
-        )
-        .score;
-        let dhash_sim = compute_similarity_with_weights(
+        );
+        let dhash_sim = compute_score_only(
             &self.dhash,
             &other.dhash,
             config.global_weight,
             config.block_weight,
             config.block_distance_threshold,
-        )
-        .score;
+        );
 
         let weighted_score = ahash_sim * config.ahash_weight
             + phash_sim * config.phash_weight
@@ -413,9 +426,17 @@ impl MultiHashFingerprint {
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss
         )]
-        let avg_distance = ((ahash_dist as f32 * config.ahash_weight)
-            + (phash_dist as f32 * config.phash_weight)
-            + (dhash_dist as f32 * config.dhash_weight)) as u32;
+        let avg_distance = {
+            let weight_sum = config.ahash_weight + config.phash_weight + config.dhash_weight;
+            let raw = (ahash_dist as f32 * config.ahash_weight)
+                + (phash_dist as f32 * config.phash_weight)
+                + (dhash_dist as f32 * config.dhash_weight);
+            if weight_sum > 0.0 {
+                (raw / weight_sum) as u32
+            } else {
+                0
+            }
+        };
 
         Similarity {
             score: weighted_score.clamp(0.0, 1.0),
@@ -440,6 +461,20 @@ impl MultiHashFingerprint {
         );
         let clamped_threshold = threshold.clamp(0.0, 1.0);
         self.compare(other).score >= clamped_threshold
+    }
+}
+
+impl core::fmt::Display for MultiHashFingerprint {
+    /// Formats as `exact_hex|ahash_global|phash_global|dhash_global`
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for byte in &self.exact {
+            write!(f, "{:02x}", byte)?;
+        }
+        write!(
+            f,
+            "|{:016x}|{:016x}|{:016x}",
+            self.ahash.global_hash, self.phash.global_hash, self.dhash.global_hash
+        )
     }
 }
 
@@ -590,5 +625,65 @@ mod tests {
         let z: MultiHashFingerprint = bytemuck::Zeroable::zeroed();
         assert_eq!(*z.exact_hash(), [0u8; 32]);
         assert_eq!(z.ahash().global_hash(), 0);
+    }
+
+    #[test]
+    fn image_fingerprint_display() {
+        let fp = ImageFingerprint::new([0xABu8; 32], 0x1234_5678_9ABC_DEF0, [0xFF; 16]);
+        let s = format!("{}", fp);
+        assert!(s.starts_with("abababab"));
+        assert!(s.contains(":123456789abcdef0:"));
+        assert!(s.contains("00000000000000ff"));
+    }
+
+    #[test]
+    fn multi_hash_fingerprint_display() {
+        let m = multi([0x01u8; 32], 0xAAAA, 0xBBBB, 0xCCCC);
+        let s = format!("{}", m);
+        assert!(s.starts_with("01010101"));
+        assert!(s.contains("|000000000000aaaa|"));
+        assert!(s.contains("|000000000000bbbb|"));
+        assert!(s.ends_with("000000000000cccc"));
+    }
+
+    #[test]
+    fn is_similar_uses_block_hashes() {
+        // Two fingerprints with identical global hash but very different blocks
+        let fp1 = ImageFingerprint::new([1u8; 32], 0x1234, [0u64; 16]);
+        let fp2 = ImageFingerprint::new([2u8; 32], 0x1234, [u64::MAX; 16]);
+        // Global distance is 0, but blocks are maximally different (excluded by threshold)
+        // With block weighting, score should be less than 1.0
+        assert!(!fp1.is_similar(&fp2, 1.0));
+        // But with a low threshold it should still pass
+        assert!(fp1.is_similar(&fp2, 0.3));
+    }
+
+    #[test]
+    fn perceptual_distance_bounded_with_inflated_weights() {
+        let a = multi([1u8; 32], 0, 0xFFFF_FFFF_FFFF_FFFF, 0);
+        let b = multi([2u8; 32], 0, 0, 0);
+        let cfg = MultiHashConfig {
+            ahash_weight: 0.0,
+            phash_weight: 5.0,
+            dhash_weight: 0.0,
+            ..MultiHashConfig::default()
+        };
+        let s = a.compare_with_config(&b, &cfg);
+        // Distance should be normalized: 64 * 5.0 / 5.0 = 64 (not 320)
+        assert!(s.perceptual_distance <= 64, "got {}", s.perceptual_distance);
+    }
+
+    #[test]
+    fn perceptual_distance_zero_weights() {
+        let a = multi([1u8; 32], 0xFFFF, 0xFFFF, 0xFFFF);
+        let b = multi([2u8; 32], 0, 0, 0);
+        let cfg = MultiHashConfig {
+            ahash_weight: 0.0,
+            phash_weight: 0.0,
+            dhash_weight: 0.0,
+            ..MultiHashConfig::default()
+        };
+        let s = a.compare_with_config(&b, &cfg);
+        assert_eq!(s.perceptual_distance, 0);
     }
 }

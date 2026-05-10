@@ -108,6 +108,9 @@ pub use embed::{LocalProvider, LocalProviderConfig};
 
 pub use error::ImgFprintError;
 
+/// Re-export of [`image::DynamicImage`] for use with [`ImageFingerprinter::fingerprint_image`].
+pub use image::DynamicImage;
+
 #[cfg(test)]
 mod tests {
     use super::*;

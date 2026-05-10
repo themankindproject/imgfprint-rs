@@ -190,6 +190,71 @@ impl FingerprinterContext {
         self.fingerprint_with(&bytes, algorithm)
     }
 
+    /// Computes a multi-algorithm fingerprint from an already-decoded [`DynamicImage`].
+    ///
+    /// Skips the decode step entirely — useful when you already hold a
+    /// `DynamicImage` (e.g., from a video frame or in-memory composition).
+    /// The BLAKE3 exact hash is computed over the image's raw RGB8 pixel data.
+    pub fn fingerprint_image(
+        &mut self,
+        image: &image::DynamicImage,
+    ) -> Result<MultiHashFingerprint, ImgFprintError> {
+        let rgb = image.to_rgb8();
+        let raw = rgb.as_raw();
+
+        let exact_hash: [u8; 32] = {
+            self.exact_hasher.reset();
+            self.exact_hasher.update(raw);
+            *self.exact_hasher.finalize().as_bytes()
+        };
+
+        let normalized = self.preprocessor.normalize_as_slice(image)?;
+
+        let global_region = extract_global_region_from_raw(normalized);
+        let blocks = extract_blocks_from_raw(normalized);
+
+        let (ahash_fp, phash_fp, dhash_fp) = {
+            #[cfg(feature = "parallel")]
+            {
+                let (ahash_result, (phash_result, dhash_result)) = rayon::join(
+                    || Self::compute_ahash_data(&global_region, &blocks),
+                    || {
+                        rayon::join(
+                            || Self::compute_phash_data(&global_region, &blocks),
+                            || Self::compute_dhash_data(&global_region, &blocks),
+                        )
+                    },
+                );
+                let (ahash_global, ahash_blocks) = ahash_result;
+                let (phash_global, phash_blocks) = phash_result;
+                let (dhash_global, dhash_blocks) = dhash_result;
+                (
+                    ImageFingerprint::new(exact_hash, ahash_global, ahash_blocks),
+                    ImageFingerprint::new(exact_hash, phash_global, phash_blocks),
+                    ImageFingerprint::new(exact_hash, dhash_global, dhash_blocks),
+                )
+            }
+            #[cfg(not(feature = "parallel"))]
+            {
+                let (ahash_global, ahash_blocks) =
+                    Self::compute_ahash_data(&global_region, &blocks);
+                let (phash_global, phash_blocks) =
+                    Self::compute_phash_data(&global_region, &blocks);
+                let (dhash_global, dhash_blocks) =
+                    Self::compute_dhash_data(&global_region, &blocks);
+                (
+                    ImageFingerprint::new(exact_hash, ahash_global, ahash_blocks),
+                    ImageFingerprint::new(exact_hash, phash_global, phash_blocks),
+                    ImageFingerprint::new(exact_hash, dhash_global, dhash_blocks),
+                )
+            }
+        };
+
+        Ok(MultiHashFingerprint::new(
+            exact_hash, ahash_fp, phash_fp, dhash_fp,
+        ))
+    }
+
     /// Computes a single perceptual hash using the specified algorithm.
     ///
     /// More efficient than computing all hashes when only one algorithm is needed.
@@ -499,6 +564,16 @@ impl ImageFingerprinter {
         Self::fingerprint_with(&bytes, algorithm)
     }
 
+    /// Computes a multi-algorithm fingerprint from an already-decoded [`DynamicImage`].
+    ///
+    /// Skips the decode step — useful when you already hold a `DynamicImage`
+    /// (e.g., from a video frame or in-memory composition).
+    pub fn fingerprint_image(
+        image: &image::DynamicImage,
+    ) -> Result<MultiHashFingerprint, ImgFprintError> {
+        SHARED_CTX.with(|ctx| ctx.borrow_mut().fingerprint_image(image))
+    }
+
     /// Computes a single perceptual hash using the specified algorithm.
     ///
     /// Use this when you need a specific algorithm or want to minimize
@@ -672,6 +747,40 @@ impl ImageFingerprinter {
     {
         let mut ctx = FingerprinterContext::new();
         ctx.fingerprint_batch_chunked(images, chunk_size, callback);
+    }
+
+    /// Processes an iterator of file paths, yielding fingerprint results lazily.
+    ///
+    /// Unlike [`fingerprint_batch`](Self::fingerprint_batch), this does not require
+    /// loading all images into memory at once. Each path is read and fingerprinted
+    /// on demand.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use imgfprint::ImageFingerprinter;
+    /// use std::path::PathBuf;
+    ///
+    /// let paths = vec![PathBuf::from("a.jpg"), PathBuf::from("b.png")];
+    /// for (path, result) in ImageFingerprinter::fingerprint_stream(paths.into_iter()) {
+    ///     match result {
+    ///         Ok(fp) => println!("{}: {}", path.display(), fp),
+    ///         Err(e) => eprintln!("{}: {}", path.display(), e),
+    ///     }
+    /// }
+    /// ```
+    pub fn fingerprint_stream<I, P>(
+        paths: I,
+    ) -> impl Iterator<Item = (P, Result<MultiHashFingerprint, ImgFprintError>)>
+    where
+        I: Iterator<Item = P>,
+        P: AsRef<Path>,
+    {
+        let mut ctx = FingerprinterContext::new();
+        paths.map(move |p| {
+            let result = ctx.fingerprint_path(p.as_ref());
+            (p, result)
+        })
     }
 }
 
@@ -1100,5 +1209,85 @@ mod tests {
         single_set.insert(single);
         single_set.insert(single);
         assert_eq!(single_set.len(), 1);
+    }
+
+    #[test]
+    fn test_fingerprint_stream_basic() {
+        let img = create_test_image(64, 64);
+        let dir = std::env::temp_dir();
+        let p1 = dir.join("imgfprint_stream_test1.png");
+        let p2 = dir.join("imgfprint_stream_test2.png");
+        std::fs::write(&p1, &img).unwrap();
+        std::fs::write(&p2, &img).unwrap();
+
+        let paths = vec![p1.clone(), p2.clone()];
+        let results: Vec<_> = ImageFingerprinter::fingerprint_stream(paths.into_iter()).collect();
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0].1.is_ok());
+        assert!(results[1].1.is_ok());
+        // Same image → same fingerprint
+        assert_eq!(
+            results[0].1.as_ref().unwrap().exact_hash(),
+            results[1].1.as_ref().unwrap().exact_hash()
+        );
+
+        let _ = std::fs::remove_file(&p1);
+        let _ = std::fs::remove_file(&p2);
+    }
+
+    #[test]
+    fn test_fingerprint_stream_missing_file() {
+        let paths = vec![std::path::PathBuf::from("/nonexistent_imgfprint_xyz.png")];
+        let results: Vec<_> = ImageFingerprinter::fingerprint_stream(paths.into_iter()).collect();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].1.is_err());
+    }
+
+    #[test]
+    fn test_fingerprint_image_basic() {
+        let img = image::ImageBuffer::from_fn(100, 100, |x, y| {
+            Rgb([(x % 256) as u8, (y % 256) as u8, 128])
+        });
+        let dynamic = image::DynamicImage::ImageRgb8(img);
+
+        let mut ctx = FingerprinterContext::new();
+        let fp = ctx.fingerprint_image(&dynamic).unwrap();
+        assert!(!fp.exact_hash().iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn test_fingerprint_image_deterministic() {
+        let img = image::ImageBuffer::from_fn(100, 100, |x, y| {
+            Rgb([(x % 256) as u8, (y % 256) as u8, 128])
+        });
+        let dynamic = image::DynamicImage::ImageRgb8(img);
+
+        let fp1 = ImageFingerprinter::fingerprint_image(&dynamic).unwrap();
+        let fp2 = ImageFingerprinter::fingerprint_image(&dynamic).unwrap();
+        assert_eq!(fp1.exact_hash(), fp2.exact_hash());
+        assert_eq!(fp1.phash().global_hash(), fp2.phash().global_hash());
+    }
+
+    #[test]
+    fn test_fingerprint_image_matches_bytes_perceptually() {
+        let img = image::ImageBuffer::from_fn(100, 100, |x, y| {
+            Rgb([(x % 256) as u8, (y % 256) as u8, 128])
+        });
+        let dynamic = image::DynamicImage::ImageRgb8(img.clone());
+
+        // Encode to PNG bytes
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .unwrap();
+
+        let fp_image = ImageFingerprinter::fingerprint_image(&dynamic).unwrap();
+        let fp_bytes = ImageFingerprinter::fingerprint(&buf).unwrap();
+
+        // Perceptual hashes should match (same pixel data)
+        assert_eq!(fp_image.phash().global_hash(), fp_bytes.phash().global_hash());
+        assert_eq!(fp_image.dhash().global_hash(), fp_bytes.dhash().global_hash());
+        // Exact hashes differ (one hashes raw RGB, other hashes PNG bytes)
+        assert_ne!(fp_image.exact_hash(), fp_bytes.exact_hash());
     }
 }
