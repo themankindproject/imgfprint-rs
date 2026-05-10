@@ -1,3 +1,10 @@
+//! Similarity computation for perceptual fingerprints.
+//!
+//! This module is `no_std`-compatible: all types and functions use only `core`
+//! primitives and the `subtle` crate (also `no_std`). Consumers that only need
+//! to *compare* pre-computed fingerprints (e.g., on embedded targets) can depend
+//! on this module without pulling in `std`, `image`, or any I/O.
+
 use crate::core::fingerprint::ImageFingerprint;
 use subtle::ConstantTimeEq;
 
@@ -78,7 +85,7 @@ impl Similarity {
 }
 
 impl PartialOrd for Similarity {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         self.score.partial_cmp(&other.score)
     }
 }
@@ -130,13 +137,8 @@ pub fn compute_similarity_with_weights(
 ) -> Similarity {
     let exact_match = a.exact.ct_eq(&b.exact).into();
 
+    let combined_score = compute_score_only(a, b, global_weight, block_weight, block_threshold);
     let global_distance = hamming_distance(a.global_hash, b.global_hash);
-    let global_similarity = hash_similarity(global_distance);
-    let block_similarity =
-        compute_block_similarity_with_threshold(&a.block_hashes, &b.block_hashes, block_threshold);
-
-    let combined_score =
-        (global_weight * global_similarity + block_weight * block_similarity).clamp(0.0, 1.0);
 
     if exact_match {
         Similarity {
@@ -151,6 +153,27 @@ pub fn compute_similarity_with_weights(
             perceptual_distance: global_distance,
         }
     }
+}
+
+/// Computes only the combined similarity score without exact-hash comparison.
+///
+/// Used by `MultiHashFingerprint::compare_with_config` which already handles
+/// the exact-match check at the outer level, avoiding 3 redundant `ct_eq` calls.
+#[inline]
+#[must_use]
+pub(crate) fn compute_score_only(
+    a: &ImageFingerprint,
+    b: &ImageFingerprint,
+    global_weight: f32,
+    block_weight: f32,
+    block_threshold: u32,
+) -> f32 {
+    let global_distance = hamming_distance(a.global_hash, b.global_hash);
+    let global_similarity = hash_similarity(global_distance);
+    let block_similarity =
+        compute_block_similarity_with_threshold(&a.block_hashes, &b.block_hashes, block_threshold);
+
+    (global_weight * global_similarity + block_weight * block_similarity).clamp(0.0, 1.0)
 }
 
 /// Computes block-level similarity with crop resistance.
@@ -402,5 +425,28 @@ mod tests {
         assert!(!sim.exact_match);
         assert_eq!(sim.perceptual_distance, 0);
         assert!((sim.score - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_compute_score_only_identical() {
+        let fp = ImageFingerprint::new([1u8; 32], 0xABCD, [0xABCD; 16]);
+        let score = compute_score_only(&fp, &fp, 0.4, 0.6, 32);
+        assert!((score - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_compute_score_only_different() {
+        let fp1 = ImageFingerprint::new([1u8; 32], 0, [0u64; 16]);
+        let fp2 = ImageFingerprint::new([2u8; 32], u64::MAX, [u64::MAX; 16]);
+        let score = compute_score_only(&fp1, &fp2, 0.4, 0.6, 32);
+        assert!(score < 0.1);
+    }
+
+    #[test]
+    fn test_similarity_partial_ord() {
+        let a = Similarity { score: 0.5, exact_match: false, perceptual_distance: 32 };
+        let b = Similarity { score: 0.8, exact_match: false, perceptual_distance: 12 };
+        assert!(a < b);
+        assert!(b > a);
     }
 }
