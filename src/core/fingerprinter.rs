@@ -1285,8 +1285,14 @@ mod tests {
         let fp_bytes = ImageFingerprinter::fingerprint(&buf).unwrap();
 
         // Perceptual hashes should match (same pixel data)
-        assert_eq!(fp_image.phash().global_hash(), fp_bytes.phash().global_hash());
-        assert_eq!(fp_image.dhash().global_hash(), fp_bytes.dhash().global_hash());
+        assert_eq!(
+            fp_image.phash().global_hash(),
+            fp_bytes.phash().global_hash()
+        );
+        assert_eq!(
+            fp_image.dhash().global_hash(),
+            fp_bytes.dhash().global_hash()
+        );
         // Exact hashes differ (one hashes raw RGB, other hashes PNG bytes)
         assert_ne!(fp_image.exact_hash(), fp_bytes.exact_hash());
     }

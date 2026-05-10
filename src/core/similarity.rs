@@ -444,8 +444,16 @@ mod tests {
 
     #[test]
     fn test_similarity_partial_ord() {
-        let a = Similarity { score: 0.5, exact_match: false, perceptual_distance: 32 };
-        let b = Similarity { score: 0.8, exact_match: false, perceptual_distance: 12 };
+        let a = Similarity {
+            score: 0.5,
+            exact_match: false,
+            perceptual_distance: 32,
+        };
+        let b = Similarity {
+            score: 0.8,
+            exact_match: false,
+            perceptual_distance: 12,
+        };
         assert!(a < b);
         assert!(b > a);
     }

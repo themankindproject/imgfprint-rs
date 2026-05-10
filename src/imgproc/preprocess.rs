@@ -218,17 +218,23 @@ impl Preprocessor {
         let rgb_owned;
         match image {
             DynamicImage::ImageRgb8(rgb) => {
-                let src = ImageRef::new(src_w, src_h, rgb.as_raw(), PixelType::U8x3)
-                    .map_err(|e| ImgFprintError::ProcessingError(format!("invalid source image: {}", e)))?;
-                self.resizer.resize(&src, &mut dst, &options)
-                    .map_err(|e| ImgFprintError::ProcessingError(format!("resize failed: {}", e)))?;
+                let src =
+                    ImageRef::new(src_w, src_h, rgb.as_raw(), PixelType::U8x3).map_err(|e| {
+                        ImgFprintError::ProcessingError(format!("invalid source image: {}", e))
+                    })?;
+                self.resizer.resize(&src, &mut dst, &options).map_err(|e| {
+                    ImgFprintError::ProcessingError(format!("resize failed: {}", e))
+                })?;
             }
             _ => {
                 rgb_owned = image.to_rgb8().into_raw();
-                let src = Image::from_vec_u8(src_w, src_h, rgb_owned, PixelType::U8x3)
-                    .map_err(|e| ImgFprintError::ProcessingError(format!("invalid source image: {}", e)))?;
-                self.resizer.resize(&src, &mut dst, &options)
-                    .map_err(|e| ImgFprintError::ProcessingError(format!("resize failed: {}", e)))?;
+                let src =
+                    Image::from_vec_u8(src_w, src_h, rgb_owned, PixelType::U8x3).map_err(|e| {
+                        ImgFprintError::ProcessingError(format!("invalid source image: {}", e))
+                    })?;
+                self.resizer.resize(&src, &mut dst, &options).map_err(|e| {
+                    ImgFprintError::ProcessingError(format!("resize failed: {}", e))
+                })?;
             }
         }
 
