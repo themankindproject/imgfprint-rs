@@ -406,6 +406,7 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
+ "subtle",
 ]
 
 [[package]]
@@ -624,6 +625,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest",
+]
+
+[[package]]
 name = "id-arena"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -666,14 +676,18 @@ dependencies = [
  "bytemuck",
  "criterion",
  "fast_image_resize",
+ "hmac",
  "image",
  "kamadak-exif",
  "proptest",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
  "rayon",
  "realfft",
  "rustfft",
  "serde",
  "serde_json",
+ "sha2",
  "subtle",
  "thiserror",
  "tracing",
