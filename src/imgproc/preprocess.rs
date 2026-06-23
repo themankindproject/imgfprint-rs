@@ -2,8 +2,8 @@
 
 use crate::error::ImgFprintError;
 use fast_image_resize::images::{Image, ImageRef};
-use fast_image_resize::{FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer};
 pub(crate) use fast_image_resize::CpuExtensions;
+use fast_image_resize::{FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer};
 #[cfg(test)]
 use image::GrayImage;
 use image::{DynamicImage, GenericImageView};
@@ -396,15 +396,9 @@ unsafe fn rgb_to_grayscale_sse41(rgb: &[u8], gray: &mut [u8]) {
     // Channel-select shuffle masks: pick bytes at offsets {0,3,6,9} for R,
     // {1,4,7,10} for G, {2,5,8,11} for B, and set the high 12 lanes to zero via
     // the top-bit-set sentinel (0x80 / -1i8).
-    let mask_r = _mm_set_epi8(
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 9, 6, 3, 0,
-    );
-    let mask_g = _mm_set_epi8(
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 10, 7, 4, 1,
-    );
-    let mask_b = _mm_set_epi8(
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 11, 8, 5, 2,
-    );
+    let mask_r = _mm_set_epi8(-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 9, 6, 3, 0);
+    let mask_g = _mm_set_epi8(-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 10, 7, 4, 1);
+    let mask_b = _mm_set_epi8(-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 11, 8, 5, 2);
 
     for i in 0..n_simd {
         let rgb_base = i * 12;
@@ -454,10 +448,7 @@ unsafe fn rgb_to_grayscale_sse41(rgb: &[u8], gray: &mut [u8]) {
     let tail_rgb_start = n_simd * 12;
     let tail_gray_start = n_simd * 4;
     if tail_rgb_start < rgb.len() {
-        rgb_to_grayscale_scalar(
-            &rgb[tail_rgb_start..],
-            &mut gray[tail_gray_start..],
-        );
+        rgb_to_grayscale_scalar(&rgb[tail_rgb_start..], &mut gray[tail_gray_start..]);
     }
 }
 
@@ -527,10 +518,7 @@ unsafe fn rgb_to_grayscale_neon(rgb: &[u8], gray: &mut [u8]) {
     let tail_rgb_start = n_simd * BYTES_PER_ITER;
     let tail_gray_start = n_simd * PIXELS_PER_ITER;
     if tail_rgb_start < rgb.len() {
-        rgb_to_grayscale_scalar(
-            &rgb[tail_rgb_start..],
-            &mut gray[tail_gray_start..],
-        );
+        rgb_to_grayscale_scalar(&rgb[tail_rgb_start..], &mut gray[tail_gray_start..]);
     }
 }
 
@@ -780,9 +768,12 @@ mod tests {
             rgb_to_grayscale(&rgb, &mut gray_dispatch);
 
             assert_eq!(
-                gray_scalar, gray_dispatch,
+                gray_scalar,
+                gray_dispatch,
                 "SIMD/scalar mismatch at rgb len {} ({} px): scalar={:02x?}, dispatch={:02x?}",
-                n, npix, &gray_scalar[..gray_scalar.len().min(16)],
+                n,
+                npix,
+                &gray_scalar[..gray_scalar.len().min(16)],
                 &gray_dispatch[..gray_dispatch.len().min(16)],
             );
         }

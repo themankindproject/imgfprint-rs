@@ -121,9 +121,10 @@ fn dct2_32_with_scratch(
         scratch.buffer[DCT_SIZE - 1 - i] = input[i * 2 + 1];
     }
 
-    fft.process(&mut scratch.buffer, &mut scratch.complex_buffer).map_err(|e| {
-        crate::error::ImgFprintError::processing_error(format!("DCT FFT failed: {}", e))
-    })?;
+    fft.process(&mut scratch.buffer, &mut scratch.complex_buffer)
+        .map_err(|e| {
+            crate::error::ImgFprintError::processing_error(format!("DCT FFT failed: {}", e))
+        })?;
 
     // Extract with twiddle factors and scale.
     //
@@ -195,7 +196,9 @@ pub(crate) fn compute_phash_with_scratch(
     // Row-wise DCT
     for row in 0..DCT_SIZE {
         let start = row * DCT_SIZE;
-        scratch.row_buffer.copy_from_slice(&pixels[start..start + DCT_SIZE]);
+        scratch
+            .row_buffer
+            .copy_from_slice(&pixels[start..start + DCT_SIZE]);
         dct2_32_with_scratch(
             &scratch.row_buffer,
             &mut scratch.col_buffer[start..start + DCT_SIZE],
