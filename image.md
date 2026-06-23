@@ -29,7 +29,7 @@
 
 ## Project Overview
 
-**imgfprint** is a Rust SDK (v0.4.2, edition 2021, MSRV 1.70) for extracting
+**imgfprint** is a Rust SDK (v0.4.3, edition 2021, MSRV 1.70) for extracting
 compact, deterministic image fingerprints. It combines byte-exact hashing,
 perceptual hashing, block-level crop resistance, and optional semantic
 embeddings.

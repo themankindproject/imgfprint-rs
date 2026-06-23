@@ -30,7 +30,7 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-imgfprint = "0.4.2"
+imgfprint = "0.4.3"
 ```
 
 ### Basic Example (Multi-Algorithm)
@@ -887,7 +887,7 @@ With the `local-embedding` feature:
 
 ```toml
 [dependencies]
-imgfprint = { version = "0.4.2", features = ["local-embedding"] }
+imgfprint = { version = "0.4.3", features = ["local-embedding"] }
 ```
 
 ```rust
@@ -1050,13 +1050,13 @@ Configure the library for your needs:
 ```toml
 [dependencies]
 # Minimal build (no parallel processing)
-imgfprint = { version = "0.4.2", default-features = false }
+imgfprint = { version = "0.4.3", default-features = false }
 
 # Default (serialization + parallel processing)
-imgfprint = "0.4.2"
+imgfprint = "0.4.3"
 
 # With local ONNX inference
-imgfprint = { version = "0.4.2", features = ["local-embedding"] }
+imgfprint = { version = "0.4.3", features = ["local-embedding"] }
 ```
 
 ### Available Features
@@ -1074,7 +1074,7 @@ Enable the `tracing` feature to add performance instrumentation:
 
 ```toml
 [dependencies]
-imgfprint = { version = "0.4.2", features = ["tracing"] }
+imgfprint = { version = "0.4.3", features = ["tracing"] }
 ```
 
 ```rust
