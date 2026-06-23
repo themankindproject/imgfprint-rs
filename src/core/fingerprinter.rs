@@ -4,10 +4,12 @@ use crate::error::ImgFprintError;
 use crate::hash::ahash::{compute_ahash, compute_ahash_from_64x64};
 use crate::hash::algorithms::HashAlgorithm;
 use crate::hash::dhash::{compute_dhash, compute_dhash_from_64x64};
-use crate::hash::phash::{compute_phash, compute_phash_from_64x64};
+use crate::hash::phash::{
+    compute_phash_from_64x64_with_scratch, compute_phash_with_scratch, DctScratch,
+};
 use crate::imgproc::decode::{decode_image_with_config, PreprocessConfig};
 use crate::imgproc::preprocess::{
-    extract_blocks_from_raw, extract_global_region_from_raw, Preprocessor,
+    extract_blocks_from_raw, extract_global_region_from_raw, get_cpu_extensions, Preprocessor,
 };
 use blake3::Hasher;
 use std::cell::RefCell;
@@ -96,6 +98,9 @@ fn count_results<S, T>(results: &[(S, Result<T, ImgFprintError>)]) -> (usize, us
 pub struct FingerprinterContext {
     preprocessor: Preprocessor,
     exact_hasher: Hasher,
+    #[allow(dead_code)]
+    has_simd: bool,
+    dct_scratch: DctScratch,
 }
 
 impl Default for FingerprinterContext {
@@ -108,9 +113,12 @@ impl FingerprinterContext {
     /// Creates a new fingerprinter context with cached resources.
     #[must_use]
     pub fn new() -> Self {
+        let has_simd = get_cpu_extensions() != crate::imgproc::preprocess::CpuExtensions::None;
         Self {
             preprocessor: Preprocessor::new(),
             exact_hasher: Hasher::new(),
+            has_simd,
+            dct_scratch: DctScratch::new(),
         }
     }
 
@@ -220,7 +228,13 @@ impl FingerprinterContext {
                     || Self::compute_ahash_data(&global_region, &blocks),
                     || {
                         rayon::join(
-                            || Self::compute_phash_data(&global_region, &blocks),
+                            || {
+                                Self::compute_phash_data(
+                                    &global_region,
+                                    &blocks,
+                                    &mut self.dct_scratch,
+                                )
+                            },
                             || Self::compute_dhash_data(&global_region, &blocks),
                         )
                     },
@@ -239,7 +253,7 @@ impl FingerprinterContext {
                 let (ahash_global, ahash_blocks) =
                     Self::compute_ahash_data(&global_region, &blocks);
                 let (phash_global, phash_blocks) =
-                    Self::compute_phash_data(&global_region, &blocks);
+                    Self::compute_phash_data(&global_region, &blocks, &mut self.dct_scratch);
                 let (dhash_global, dhash_blocks) =
                     Self::compute_dhash_data(&global_region, &blocks);
                 (
@@ -320,7 +334,13 @@ impl FingerprinterContext {
                     || Self::compute_ahash_data(&global_region, &blocks),
                     || {
                         rayon::join(
-                            || Self::compute_phash_data(&global_region, &blocks),
+                            || {
+                                Self::compute_phash_data(
+                                    &global_region,
+                                    &blocks,
+                                    &mut self.dct_scratch,
+                                )
+                            },
                             || Self::compute_dhash_data(&global_region, &blocks),
                         )
                     },
@@ -342,7 +362,7 @@ impl FingerprinterContext {
                 let (ahash_global, ahash_blocks) =
                     Self::compute_ahash_data(&global_region, &blocks);
                 let (phash_global, phash_blocks) =
-                    Self::compute_phash_data(&global_region, &blocks);
+                    Self::compute_phash_data(&global_region, &blocks, &mut self.dct_scratch);
                 let (dhash_global, dhash_blocks) =
                     Self::compute_dhash_data(&global_region, &blocks);
 
@@ -386,7 +406,9 @@ impl FingerprinterContext {
         let (global_hash, block_hashes) = trace_stage!("single_hash", {
             match algorithm {
                 HashAlgorithm::AHash => Self::compute_ahash_data(&global_region, &blocks),
-                HashAlgorithm::PHash => Self::compute_phash_data(&global_region, &blocks),
+                HashAlgorithm::PHash => {
+                    Self::compute_phash_data(&global_region, &blocks, &mut self.dct_scratch)
+                }
                 HashAlgorithm::DHash => Self::compute_dhash_data(&global_region, &blocks),
             }
         });
@@ -397,13 +419,14 @@ impl FingerprinterContext {
     fn compute_phash_data(
         global_region: &[f32; 32 * 32],
         blocks: &[[f32; 64 * 64]; 16],
+        scratch: &mut DctScratch,
     ) -> (u64, [u64; 16]) {
-        let global_hash = compute_phash(global_region).unwrap_or(0);
+        let global_hash = compute_phash_with_scratch(global_region, scratch).unwrap_or(0);
 
         let block_hashes = {
             let mut hashes = [0u64; 16];
             for (i, block) in blocks.iter().enumerate() {
-                hashes[i] = compute_phash_from_64x64(block).unwrap_or(0);
+                hashes[i] = compute_phash_from_64x64_with_scratch(block, scratch).unwrap_or(0);
             }
             hashes
         };

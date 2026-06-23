@@ -2,7 +2,8 @@
 
 use crate::error::ImgFprintError;
 use fast_image_resize::images::{Image, ImageRef};
-use fast_image_resize::{CpuExtensions, FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer};
+use fast_image_resize::{FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer};
+pub(crate) use fast_image_resize::CpuExtensions;
 #[cfg(test)]
 use image::GrayImage;
 use image::{DynamicImage, GenericImageView};
@@ -13,7 +14,7 @@ static CPU_EXTENSIONS: OnceLock<CpuExtensions> = OnceLock::new();
 
 /// Gets the optimal CPU extensions for the current platform.
 /// This is cached to avoid the overhead of feature detection on every Preprocessor::new() call.
-fn get_cpu_extensions() -> CpuExtensions {
+pub(crate) fn get_cpu_extensions() -> CpuExtensions {
     *CPU_EXTENSIONS.get_or_init(|| {
         #[cfg(target_arch = "x86_64")]
         {
@@ -263,14 +264,50 @@ impl Preprocessor {
 
 /// RGB to grayscale conversion using ITU-R BT.601 luma coefficients.
 ///
-/// Uses integer arithmetic and processes pixels in chunks for better
-/// CPU pipeline efficiency (ILP-friendly unrolling).
+/// Dispatches to a SIMD implementation when the CPU supports SSE4.1 (x86_64) or
+/// NEON (aarch64); otherwise falls back to the scalar 4-pixel ILP-unrolled path.
+/// The SIMD and scalar paths produce bit-identical output because the luma sum
+/// (77·R + 150·G + 29·B) is at most 65280, which fits exactly in `u16`/`i16`,
+/// so the arithmetic is order-preserving in either signed or unsigned 16-bit
+/// interpretation.
 ///
 /// # Arguments
 /// * `rgb` - RGB bytes (3 bytes per pixel, RGBRGB... format)
 /// * `gray` - Output grayscale buffer (1 byte per pixel)
 #[inline(always)]
 fn rgb_to_grayscale(rgb: &[u8], gray: &mut [u8]) {
+    let cpu = get_cpu_extensions();
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        if cpu != CpuExtensions::None {
+            // SAFETY: `get_cpu_extensions()` only returns SSE4.1 / AVX2 after
+            // `is_x86_feature_detected!` confirmed the feature at runtime. AVX2
+            // implies SSE4.1, so the SSE4.1-targeted intrinsic body is safe to
+            // call under either detection.
+            unsafe { rgb_to_grayscale_sse41(rgb, gray) };
+            return;
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        if cpu == CpuExtensions::Neon {
+            // SAFETY: gated on `target_arch = "aarch64"` and runtime Neon detection.
+            unsafe { rgb_to_grayscale_neon(rgb, gray) };
+            return;
+        }
+    }
+
+    rgb_to_grayscale_scalar(rgb, gray);
+}
+
+/// Scalar fallback for [`rgb_to_grayscale`]: 4-pixel ILP-unrolled BT.601 luma.
+///
+/// Used when `CpuExtensions::None` is detected, or as the SIMD tail for any
+/// leftover bytes that don't fill a full SIMD chunk.
+#[inline(always)]
+fn rgb_to_grayscale_scalar(rgb: &[u8], gray: &mut [u8]) {
     debug_assert_eq!(gray.len(), rgb.len() / 3);
 
     // Process 4 pixels at a time for better instruction-level parallelism
@@ -282,7 +319,6 @@ fn rgb_to_grayscale(rgb: &[u8], gray: &mut [u8]) {
         let base = i * 12;
         let gray_base = i * 4;
 
-        // Process 4 pixels with independent operations (ILP-friendly)
         let r0 = rgb[base] as u32;
         let g0 = rgb[base + 1] as u32;
         let b0 = rgb[base + 2] as u32;
@@ -318,6 +354,183 @@ fn rgb_to_grayscale(rgb: &[u8], gray: &mut [u8]) {
         let b = rgb[base + 2] as u32;
         gray[chunks * 4 + i] =
             ((LUMA_COEFF_R * r + LUMA_COEFF_G * g + LUMA_COEFF_B * b) >> LUMA_SHIFT) as u8;
+    }
+}
+
+/// SSE4.1 (and AVX2; AVX2 ⊇ SSE4.1) implementation of [`rgb_to_grayscale`].
+///
+/// Process 4 pixels (12 bytes RGB) per iteration. Loads 16 bytes per iteration
+/// — the 4 trailing bytes are padding ignored via the shuffle masks. The last
+/// iteration that can safely load 16 bytes is guarded by the `n_simd` bound
+/// derived from `len >= 16`; any remaining bytes fall through to the scalar
+/// tail (`rgb_to_grayscale_scalar`).
+///
+/// Channel deinterleaving uses `_mm_shuffle_epi8` with three precomputed masks
+/// that select the R, G, or B byte of each of 4 pixels into the low 4 bytes of
+/// an `__m128i`. Those bytes are zero-extended to 4×`i16`, multiplied by the
+/// BT.601 coefficients (which fit in `i16`), summed, then logically shifted
+/// right by 8 to extract the high byte — identical to the scalar `(sum >> 8)
+/// as u8` operation because `sum` fits in `u16`/`i16` (max 65280).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse4.1")]
+#[inline]
+unsafe fn rgb_to_grayscale_sse41(rgb: &[u8], gray: &mut [u8]) {
+    use std::arch::x86_64::*;
+
+    debug_assert_eq!(gray.len(), rgb.len() / 3);
+
+    // Number of 4-pixel iterations where the 16-byte load is safe (base + 16 <= len).
+    // `base = i * 12`, so we require `12 * i + 16 <= len`, i.e. `i <= (len - 16) / 12`.
+    // Ensure at least one iteration is possible to avoid underflow.
+    let n_simd: usize = if rgb.len() >= 16 {
+        (rgb.len() - 16) / 12 + 1
+    } else {
+        0
+    };
+
+    let zero = _mm_setzero_si128();
+    let coeff_r = _mm_set1_epi16(LUMA_COEFF_R as i16);
+    let coeff_g = _mm_set1_epi16(LUMA_COEFF_G as i16);
+    let coeff_b = _mm_set1_epi16(LUMA_COEFF_B as i16);
+
+    // Channel-select shuffle masks: pick bytes at offsets {0,3,6,9} for R,
+    // {1,4,7,10} for G, {2,5,8,11} for B, and set the high 12 lanes to zero via
+    // the top-bit-set sentinel (0x80 / -1i8).
+    let mask_r = _mm_set_epi8(
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 9, 6, 3, 0,
+    );
+    let mask_g = _mm_set_epi8(
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 10, 7, 4, 1,
+    );
+    let mask_b = _mm_set_epi8(
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 11, 8, 5, 2,
+    );
+
+    for i in 0..n_simd {
+        let rgb_base = i * 12;
+        let gray_base = i * 4;
+
+        // SAFETY: bounded by `n_simd` derivation above; `rgb_base + 16 <= len`.
+        let v = _mm_loadu_si128(rgb.as_ptr().add(rgb_base) as *const __m128i);
+
+        // Deinterleave R/G/B into the low 4 bytes of each register.
+        let r_bytes = _mm_shuffle_epi8(v, mask_r);
+        let g_bytes = _mm_shuffle_epi8(v, mask_g);
+        let b_bytes = _mm_shuffle_epi8(v, mask_b);
+
+        // Widen low 4 bytes to 4×i16 via interleave-with-zero. After
+        // `_mm_unpacklo_epi8(x, 0)`, bytes layout is [b0, 0, b1, 0, b2, 0, b3, 0, ...]
+        // which is the memory layout of 4 i16 values: [b0, b1, b2, b3, ...].
+        let r_i16 = _mm_unpacklo_epi8(r_bytes, zero);
+        let g_i16 = _mm_unpacklo_epi8(g_bytes, zero);
+        let b_i16 = _mm_unpacklo_epi8(b_bytes, zero);
+
+        // i16 multiply: low 16 bits of (b * coeff) — bit-pattern-identical to
+        // the same computation in u16 (no signed-vs-unsigned ambiguity since we
+        // only read the low 16 bits).
+        let r_scaled = _mm_mullo_epi16(r_i16, coeff_r);
+        let g_scaled = _mm_mullo_epi16(g_i16, coeff_g);
+        let b_scaled = _mm_mullo_epi16(b_i16, coeff_b);
+
+        // Sum: max sum = 65280 which fits in i16 bit pattern (0xFF00).
+        let sum = _mm_add_epi16(_mm_add_epi16(r_scaled, g_scaled), b_scaled);
+
+        // Logical shift right by 8 extracts the high byte of each i16 (= sum >> 8).
+        // The result's bit pattern (low byte zeroed, high byte = Y) matches the
+        // scalar `(sum as u32) >> 8` cast to u8.
+        let shifted = _mm_srli_epi16(sum, LUMA_SHIFT as i32);
+
+        // Extract the low byte of each i16 lane (bytes at offsets 0,2,4,6).
+        // `_mm_extract_epi8` returns i32; cast as u8 truncates to the Y value.
+        gray[gray_base] = _mm_extract_epi8(shifted, 0) as u8;
+        gray[gray_base + 1] = _mm_extract_epi8(shifted, 2) as u8;
+        gray[gray_base + 2] = _mm_extract_epi8(shifted, 4) as u8;
+        gray[gray_base + 3] = _mm_extract_epi8(shifted, 6) as u8;
+    }
+
+    // Scalar tail handles: (a) the remaining 1-11 bytes if `len % 12 != 0`,
+    // (b) the entire input if `len < 16` (n_simd = 0). The stores above wrote
+    // exactly `n_simd * 4` bytes; the scalar tail fills the rest.
+    let tail_rgb_start = n_simd * 12;
+    let tail_gray_start = n_simd * 4;
+    if tail_rgb_start < rgb.len() {
+        rgb_to_grayscale_scalar(
+            &rgb[tail_rgb_start..],
+            &mut gray[tail_gray_start..],
+        );
+    }
+}
+
+/// NEON implementation of [`rgb_to_grayscale`].
+///
+/// Uses `vld3q_u8` to load 48 bytes (16 RGB pixels) and simultaneously
+/// deinterleave them into 3 planar `uint8x16_t` vectors (`R`, `G`, `B`).
+/// Each plane is then widened to `uint16x8_t` (split into low/high halves),
+/// multiplied by the BT.601 coefficients, summed, and shifted right by 8 bits
+/// before being narrowed back to `uint8x16_t` for a single store.
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+#[inline]
+unsafe fn rgb_to_grayscale_neon(rgb: &[u8], gray: &mut [u8]) {
+    use std::arch::aarch64::*;
+
+    debug_assert_eq!(gray.len(), rgb.len() / 3);
+
+    const PIXELS_PER_ITER: usize = 16;
+    const BYTES_PER_ITER: usize = PIXELS_PER_ITER * 3; // 48
+
+    let n_simd = rgb.len() / BYTES_PER_ITER;
+
+    let coeff_r = vdupq_n_u16(LUMA_COEFF_R as u16);
+    let coeff_g = vdupq_n_u16(LUMA_COEFF_G as u16);
+    let coeff_b = vdupq_n_u16(LUMA_COEFF_B as u16);
+
+    for i in 0..n_simd {
+        let rgb_base = i * BYTES_PER_ITER;
+        let gray_base = i * PIXELS_PER_ITER;
+
+        // Load 48 bytes and deinterleave RGB into 3 planar vectors (16 bytes each).
+        let planes = vld3q_u8(rgb.as_ptr().add(rgb_base));
+
+        // Widen each 16-byte plane into two 8×u16 halves (low 8 / high 8 pixels).
+        let r_lo = vmovl_u8(vget_low_u8(planes.val[0]));
+        let r_hi = vmovl_u8(vget_high_u8(planes.val[0]));
+        let g_lo = vmovl_u8(vget_low_u8(planes.val[1]));
+        let g_hi = vmovl_u8(vget_high_u8(planes.val[1]));
+        let b_lo = vmovl_u8(vget_low_u8(planes.val[2]));
+        let b_hi = vmovl_u8(vget_high_u8(planes.val[2]));
+
+        // u16 multiplies: max value 0x9552 ≤ 0xFFFF (no overflow into 17th bit).
+        let rs_lo = vmulq_u16(r_lo, coeff_r);
+        let rs_hi = vmulq_u16(r_hi, coeff_r);
+        let gs_lo = vmulq_u16(g_lo, coeff_g);
+        let gs_hi = vmulq_u16(g_hi, coeff_g);
+        let bs_lo = vmulq_u16(b_lo, coeff_b);
+        let bs_hi = vmulq_u16(b_hi, coeff_b);
+
+        // Sum and shift right by 8 (logical).
+        let sum_lo = vaddq_u16(vaddq_u16(rs_lo, gs_lo), bs_lo);
+        let sum_hi = vaddq_u16(vaddq_u16(rs_hi, gs_hi), bs_hi);
+        let y_lo = vshrq_n_u16(sum_lo, LUMA_SHIFT as i32);
+        let y_hi = vshrq_n_u16(sum_hi, LUMA_SHIFT as i32);
+
+        // Narrow each 8×u16 to 8×u8 (taking the low byte = Y) and combine into
+        // a single 16-byte vector for a single store.
+        let y_lo_u8 = vmovn_u16(y_lo);
+        let y_hi_u8 = vmovn_u16(y_hi);
+        let y_u8x16 = vcombine_u8(y_lo_u8, y_hi_u8);
+
+        vst1q_u8(gray.as_mut_ptr().add(gray_base), y_u8x16);
+    }
+
+    // Scalar tail for remaining 1..47 bytes.
+    let tail_rgb_start = n_simd * BYTES_PER_ITER;
+    let tail_gray_start = n_simd * PIXELS_PER_ITER;
+    if tail_rgb_start < rgb.len() {
+        rgb_to_grayscale_scalar(
+            &rgb[tail_rgb_start..],
+            &mut gray[tail_gray_start..],
+        );
     }
 }
 
@@ -524,6 +737,72 @@ mod tests {
         for &g in &gray {
             assert_eq!(g, 255);
         }
+    }
+
+    /// Parity test: SIMD path must produce bit-identical output to scalar for all
+    /// input sizes that exercise the SIMD bulk, the no-SIMD early-out (`len < 16`),
+    /// and the SIMD tail (`len % 12 != 0`).
+    #[test]
+    fn test_rgb_to_grayscale_simd_matches_scalar() {
+        // Sizes (in bytes of RGB) probe the SIMD/scalar boundary and tail.
+        // All are multiples of 3 (the library's public invariant for this fn).
+        //   3 — 1 px, below the 16-byte load floor → pure scalar path
+        //  24 — 8 px, 1 SIMD iter, no tail
+        //  27 — 9 px, 1 SIMD iter, 4-byte tail
+        //  36 — 12 px, 2 SIMD iters, 4-px tail
+        //  48 — 16 px, 3 SIMD iters, 4-px tail  (n_simd stops at floor((48-16)/12)+1=3)
+        //  63 — 21 px, irregular tail
+        //  96 — 32 px, exercised by 256×256 normalization pass
+        //  300 — 100 px, an arbitrary larger oddity
+        let sizes: [usize; 8] = [3, 24, 27, 36, 48, 63, 96, 300];
+
+        // Deterministic PRNG: LinCon (LCG) with fixed seed so each pixel's RGB
+        // triplet is uncorrelated with its neighbors.
+        let build_rgb = |n: usize| -> Vec<u8> {
+            let mut v = Vec::with_capacity(n);
+            let mut s: u32 = 0x6d4b_7f15;
+            for _ in 0..n {
+                s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+                v.push((s >> 24) as u8);
+            }
+            v
+        };
+
+        for &n in &sizes {
+            assert!(n % 3 == 0, "test invariant: n must be a multiple of 3");
+            let rgb = build_rgb(n);
+            let npix = n / 3;
+
+            let mut gray_scalar = vec![0u8; npix];
+            rgb_to_grayscale_scalar(&rgb, &mut gray_scalar);
+
+            let mut gray_dispatch = vec![0u8; npix];
+            rgb_to_grayscale(&rgb, &mut gray_dispatch);
+
+            assert_eq!(
+                gray_scalar, gray_dispatch,
+                "SIMD/scalar mismatch at rgb len {} ({} px): scalar={:02x?}, dispatch={:02x?}",
+                n, npix, &gray_scalar[..gray_scalar.len().min(16)],
+                &gray_dispatch[..gray_dispatch.len().min(16)],
+            );
+        }
+    }
+
+    /// Bit-identical parity test for the standard 256×256 image used everywhere
+    /// else in the library. This guards against regressions introduced when the
+    /// SIMD path's tail logic is touched.
+    #[test]
+    fn test_rgb_to_grayscale_simd_matches_scalar_256x256() {
+        let n = (256 * 256) * 3;
+        let rgb: Vec<u8> = (0..n as u32).map(|i| (i & 0xFF) as u8).collect();
+
+        let mut gray_scalar = vec![0u8; 256 * 256];
+        rgb_to_grayscale_scalar(&rgb, &mut gray_scalar);
+
+        let mut gray_dispatch = vec![0u8; 256 * 256];
+        rgb_to_grayscale(&rgb, &mut gray_dispatch);
+
+        assert_eq!(gray_scalar, gray_dispatch);
     }
 
     #[test]
