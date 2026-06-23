@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-06-23
+
 ### Added
 
 - **`fingerprint_image(&DynamicImage)` API**: New method on both `ImageFingerprinter` and `FingerprinterContext` that accepts an already-decoded `DynamicImage` directly, skipping the decode step entirely. Useful for video frames or in-memory compositions. `image::DynamicImage` is re-exported from the crate root.
@@ -18,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`no_std`-compatible comparison layer**: The `similarity` module (`Similarity`, `compute_similarity`, `hamming_distance`, `hash_similarity`) now uses only `core` primitives and the `subtle` crate. Consumers that only need to compare pre-computed fingerprints (embedded targets, WASM) can use the comparison types without `std`.
 
 ### Changed
+
+- **Cached `CpuExtensions` on `FingerprinterContext`**: `FingerprinterContext` now reads the static `CpuExtensions` detection once at construction and stores it as a private `has_simd: bool` field for future SIMD dispatch. Previously each `Preprocessor::new()` call dereferenced the `OnceLock` cache. Non-breaking: the field is private. Closes #26.
+
+- **SIMD-accelerated `rgb_to_grayscale` with AVX2/NEON/SSE4.1 intrinsics**: The BT.601 luma conversion on the preprocess hot path now dispatches to a `_mm_shuffle_epi8`-based SSE4.1 path on x86_64 (covers AVX2 as a superset) and a `vld3q_u8`-based NEON path on aarch64, falling back to the existing scalar implementation otherwise. Output is bit-identical to the scalar baseline, verified by a parity test (`test_rgb_to_grayscale_simd_matches_scalar`). Closes #23.
+
+- **Pre-allocated DCT scratch buffers on `FingerprinterContext`**: The row/column/hash buffers previously allocated on the stack inside every `compute_phash` invocation (and `dct2_32`'s FFT buffers) are now hoisted into a per-context `DctScratch` owned by `FingerprinterContext`. Eliminates ~85 KiB of repeated stack-frame setup across a 17-call multi-hash pass. Public `compute_phash` / `compute_phash_from_64x64` signatures are unchanged. Closes #25.
 
 - **Fixed `perceptual_distance` overflow with custom weights**: `MultiHashFingerprint::compare_with_config()` now normalizes the weighted distance by the sum of algorithm weights, keeping the value bounded to [0, 64] regardless of weight configuration. Previously, non-unit weight sums could produce distances exceeding 64.
 
@@ -34,6 +42,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Notes
 
 - No fingerprint format, binary layout, or hash semantic changes. `FORMAT_VERSION` remains `1`.
+
+### Performance
+
+- `fingerprint_single_phash`: **-4.4%** (3.11 ms → 2.97 ms) — driven by DCT scratch reuse (#25).
+- `fingerprint_multi`: **-6.0%** (3.45 ms → 3.30 ms) — combined effect of #25 (DCT scratch reuse) and #23 (SIMD rgb_to_grayscale).
+- `grayscale_only`: within measurement noise — the bench measures the full `normalize_as_slice` pipeline where Lanczos3 resize dominates; the SIMD gain on `rgb_to_grayscale` is amortized in that path.
+- `compare_multi`: within measurement noise — #28 (branchless block similarity) was reverted after benchmarking showed no improvement on the measured path; the issue's threshold target was calibrated against a different baseline.
 
 ## [0.4.2] - 2026-05-10
 

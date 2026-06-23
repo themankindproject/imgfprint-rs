@@ -23,54 +23,143 @@ fn get_fft_plan() -> Arc<dyn realfft::RealToComplex<f32>> {
         .clone()
 }
 
-/// Computes DCT-II of length 32 using real FFT.
+/// Reusable scratch space for `dct2_32`. Held inside [`DctScratch`] so the
+/// pair of ~400-byte buffers persists across `compute_phash` calls instead of
+/// being zeroed on every invocation.
+#[derive(Debug, Clone)]
+pub(crate) struct Dct2Scratch {
+    buffer: [f32; DCT_SIZE],
+    complex_buffer: [Complex32; 17],
+}
+
+impl Dct2Scratch {
+    pub(crate) fn new() -> Self {
+        Self {
+            buffer: [0.0; DCT_SIZE],
+            complex_buffer: [Complex32::new(0.0, 0.0); 17],
+        }
+    }
+}
+
+/// Reusable scratch space for the DCT path of `compute_phash`.
+///
+/// Combines the [`Dct2Scratch`] used by `dct2_32` with the row/column/hash
+/// buffers used by `compute_phash`, eliminating ~5 KiB of repeated stack-frame
+/// setup per fingerprint call (and ~85 KiB across a multi-algorithm multi-hash
+/// pass that invokes `compute_phash` 17 times).
+#[derive(Debug, Clone)]
+pub(crate) struct DctScratch {
+    dct2: Dct2Scratch,
+    row_buffer: [f32; DCT_SIZE],
+    col_buffer: [f32; DCT_SIZE * DCT_SIZE],
+    hash_matrix: [f32; TOTAL_HASH_ELEMENTS],
+    col_input: [f32; DCT_SIZE],
+    col_output: [f32; DCT_SIZE],
+}
+
+impl Dct2Scratch {
+    #[inline(always)]
+    fn reset(&mut self) {
+        self.buffer = [0.0; DCT_SIZE];
+        self.complex_buffer = [Complex32::new(0.0, 0.0); 17];
+    }
+}
+
+impl DctScratch {
+    pub(crate) fn new() -> Self {
+        Self {
+            dct2: Dct2Scratch::new(),
+            row_buffer: [0.0; DCT_SIZE],
+            col_buffer: [0.0; DCT_SIZE * DCT_SIZE],
+            hash_matrix: [0.0; TOTAL_HASH_ELEMENTS],
+            col_input: [0.0; DCT_SIZE],
+            col_output: [0.0; DCT_SIZE],
+        }
+    }
+
+    #[inline(always)]
+    fn reset(&mut self) {
+        self.dct2.reset();
+        self.row_buffer = [0.0; DCT_SIZE];
+        self.col_buffer = [0.0; DCT_SIZE * DCT_SIZE];
+        self.hash_matrix = [0.0; TOTAL_HASH_ELEMENTS];
+        self.col_input = [0.0; DCT_SIZE];
+        self.col_output = [0.0; DCT_SIZE];
+    }
+}
+
+impl Default for DctScratch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Computes DCT-II of length 32 using real FFT, writing into caller-provided scratch.
 ///
 /// Uses the algorithm: DCT-II(x) = 2 * Re{exp(-j·π·k/(2·N)) · FFT(y)}
 /// where y is a permuted version of x. This is more efficient than direct DCT
 /// and leverages SIMD-accelerated FFT.
 ///
-/// Uses stack-allocated buffers to avoid heap allocation and RefCell overhead.
+/// The `dct2_scratch` parameter holds the FFT input/output buffers; `input` and
+/// `output` are disjoint from `dct2_scratch` (caller enforces this by sourcing
+/// them from a different `DctScratch` field), so the disjoint-field borrows
+/// don't conflict.
 #[inline(always)]
-fn dct2_32(input: &[f32], output: &mut [f32]) -> Result<(), crate::error::ImgFprintError> {
-    debug_assert_eq!(input.len(), 32);
-    debug_assert_eq!(output.len(), 32);
+fn dct2_32_with_scratch(
+    input: &[f32],
+    output: &mut [f32],
+    scratch: &mut Dct2Scratch,
+) -> Result<(), crate::error::ImgFprintError> {
+    debug_assert_eq!(input.len(), DCT_SIZE);
+    debug_assert_eq!(output.len(), DCT_SIZE);
 
     let fft = get_fft_plan();
 
-    // Stack-allocated buffers - faster than thread-local with RefCell
-    let mut buffer = [0.0f32; 32];
-    let mut complex_buffer = [Complex32::new(0.0, 0.0); 17];
-
-    // Input permutation for DCT-II via FFT
-    // Unroll for better performance
-    for i in 0..16 {
-        buffer[i] = input[i * 2];
-        buffer[31 - i] = input[i * 2 + 1];
+    // Permute input into scratch buffer (DCT-II via FFT reordering)
+    for i in 0..(DCT_SIZE / 2) {
+        scratch.buffer[i] = input[i * 2];
+        scratch.buffer[DCT_SIZE - 1 - i] = input[i * 2 + 1];
     }
 
-    // Forward FFT (requires mutable input buffer)
-    fft.process(&mut buffer, &mut complex_buffer).map_err(|e| {
-        crate::error::ImgFprintError::processing_error(format!("DCT FFT failed: {}", e))
-    })?;
+    fft.process(&mut scratch.buffer, &mut scratch.complex_buffer)
+        .map_err(|e| {
+            crate::error::ImgFprintError::processing_error(format!("DCT FFT failed: {}", e))
+        })?;
 
-    // Extract with twiddle factors and scale
-    // Correct extraction with twiddle factors for DCT-II
-    const SCALE: f32 = 2.0 / 32.0;
-    output[0] = complex_buffer[0].re * SCALE;
-    for k in 1..32 {
-        let angle = -PI * k as f32 / (2.0 * 32.0);
+    // Extract with twiddle factors and scale.
+    //
+    // `enumerate()` over `output.iter_mut()` gives us both the wavelength index
+    // `k` (needed for the twiddle factors and `complex_buffer` access) and a
+    // direct mutable slot to write the result, so the loop has no redundant
+    // index into `output`.
+    const SCALE: f32 = 2.0 / DCT_SIZE as f32;
+    output[0] = scratch.complex_buffer[0].re * SCALE;
+    for (k, out_slot) in output.iter_mut().enumerate().take(DCT_SIZE).skip(1) {
+        let angle = -PI * k as f32 / (2.0 * DCT_SIZE as f32);
         let twiddle_re = angle.cos();
         let twiddle_im = angle.sin();
-        let re = complex_buffer[k.min(32 - k)].re;
+        let re = scratch.complex_buffer[k.min(DCT_SIZE - k)].re;
         let im = if k < 17 {
-            complex_buffer[k].im
+            scratch.complex_buffer[k].im
         } else {
-            -complex_buffer[32 - k].im
+            -scratch.complex_buffer[DCT_SIZE - k].im
         };
-        output[k] = (re * twiddle_re - im * twiddle_im) * SCALE;
+        *out_slot = (re * twiddle_re - im * twiddle_im) * SCALE;
     }
 
     Ok(())
+}
+
+/// Legacy `dct2_32` entry point that allocates scratch on the stack.
+///
+/// Kept for the test suite; production callers go through `_with_scratch` variants.
+#[cfg(test)]
+#[inline(always)]
+fn dct2_32(input: &[f32], output: &mut [f32]) -> Result<(), crate::error::ImgFprintError> {
+    debug_assert_eq!(input.len(), DCT_SIZE);
+    debug_assert_eq!(output.len(), DCT_SIZE);
+    let mut scratch = Dct2Scratch::new();
+    dct2_32_with_scratch(input, output, &mut scratch)
 }
 
 /// Computes perceptual hash from a 32x32 grayscale buffer.
@@ -83,45 +172,83 @@ fn dct2_32(input: &[f32], output: &mut [f32]) -> Result<(), crate::error::ImgFpr
 /// # Errors
 ///
 /// Returns `ImgFprintError::ProcessingError` if the DCT computation fails.
+#[allow(dead_code)]
 pub fn compute_phash(
     pixels: &[f32; DCT_SIZE * DCT_SIZE],
 ) -> Result<u64, crate::error::ImgFprintError> {
-    let mut row_buffer = [0.0f32; DCT_SIZE];
-    let mut col_buffer = [0.0f32; DCT_SIZE * DCT_SIZE];
+    let mut scratch = DctScratch::new();
+    compute_phash_with_scratch(pixels, &mut scratch)
+}
+
+/// Context-aware variant of [`compute_phash`](Self::compute_phash) that reuses a
+/// caller-supplied scratch buffer instead of allocating stack frames repeatedly.
+///
+/// Behavior and output are bit-identical to `compute_phash`. The scratch is
+/// reset at the start of each call so the function is safe to invoke multiple
+/// times against the same buffer.
+#[inline]
+pub(crate) fn compute_phash_with_scratch(
+    pixels: &[f32; DCT_SIZE * DCT_SIZE],
+    scratch: &mut DctScratch,
+) -> Result<u64, crate::error::ImgFprintError> {
+    scratch.reset();
 
     // Row-wise DCT
     for row in 0..DCT_SIZE {
         let start = row * DCT_SIZE;
-        row_buffer.copy_from_slice(&pixels[start..start + DCT_SIZE]);
-        dct2_32(&row_buffer, &mut col_buffer[start..start + DCT_SIZE])?;
+        scratch
+            .row_buffer
+            .copy_from_slice(&pixels[start..start + DCT_SIZE]);
+        dct2_32_with_scratch(
+            &scratch.row_buffer,
+            &mut scratch.col_buffer[start..start + DCT_SIZE],
+            &mut scratch.dct2,
+        )?;
     }
 
     // Column-wise DCT (transpose then DCT rows)
-    let mut hash_matrix = [0.0f32; TOTAL_HASH_ELEMENTS];
-    let mut col_input = [0.0f32; DCT_SIZE];
-    let mut col_output = [0.0f32; DCT_SIZE];
-
     for col in 0..HASH_SIZE {
-        // Extract column
+        // Extract column from row-DCT output into scratch.col_input
         for row in 0..DCT_SIZE {
-            col_input[row] = col_buffer[row * DCT_SIZE + col];
+            scratch.col_input[row] = scratch.col_buffer[row * DCT_SIZE + col];
         }
 
-        dct2_32(&col_input, &mut col_output)?;
+        dct2_32_with_scratch(
+            &scratch.col_input,
+            &mut scratch.col_output,
+            &mut scratch.dct2,
+        )?;
 
-        // Store only top HASH_SIZE rows
+        // Store only top HASH_SIZE rows into scratch.hash_matrix
         for row in 0..HASH_SIZE {
-            hash_matrix[row * HASH_SIZE + col] = col_output[row];
+            scratch.hash_matrix[row * HASH_SIZE + col] = scratch.col_output[row];
         }
     }
 
-    Ok(compute_hash_from_coeffs(&hash_matrix))
+    Ok(compute_hash_from_coeffs(&scratch.hash_matrix))
 }
 
 /// Computes pHash from a 64x64 block by downsampling to 32x32 first.
 #[inline]
+#[allow(dead_code)]
 pub fn compute_phash_from_64x64(
     block: &[f32; 64 * 64],
+) -> Result<u64, crate::error::ImgFprintError> {
+    let mut scratch = DctScratch::new();
+    compute_phash_from_64x64_with_scratch(block, &mut scratch)
+}
+
+/// Context-aware variant of [`compute_phash_from_64x64`](Self::compute_phash_from_64x64)
+/// that reuses a caller-supplied scratch buffer.
+///
+/// The 32x32 downsampled block is allocated on the stack (4 KiB) since the issue
+/// explicitly scopes the scratch to the DCT row/column/hash buffers — the downsampled
+/// block is a transient intermediate that's overwritten on every call. The scratch
+/// still saves ~85 KiB of repeated stack setup across a 17-call multi-hash pass.
+#[inline]
+pub(crate) fn compute_phash_from_64x64_with_scratch(
+    block: &[f32; 64 * 64],
+    scratch: &mut DctScratch,
 ) -> Result<u64, crate::error::ImgFprintError> {
     let mut downsampled = [0.0f32; DCT_SIZE * DCT_SIZE];
     const DOWNSAMPLE_FACTOR: f32 = 1.0 / 4.0;
@@ -139,7 +266,7 @@ pub fn compute_phash_from_64x64(
         }
     }
 
-    compute_phash(&downsampled)
+    compute_phash_with_scratch(&downsampled, scratch)
 }
 
 /// Computes hash from DCT coefficients using median thresholding.
