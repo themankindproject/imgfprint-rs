@@ -654,10 +654,9 @@ impl ImageFingerprinter {
 
             let results: Vec<(S, Result<MultiHashFingerprint, ImgFprintError>)> = images
                 .par_iter()
-                .map_init(
-                    FingerprinterContext::new,
-                    |ctx, (id, bytes)| (id.clone(), ctx.fingerprint(bytes)),
-                )
+                .map_init(FingerprinterContext::new, |ctx, (id, bytes)| {
+                    (id.clone(), ctx.fingerprint(bytes))
+                })
                 .collect();
 
             #[cfg(feature = "tracing")]
@@ -708,15 +707,9 @@ impl ImageFingerprinter {
 
             let results: Vec<(S, Result<ImageFingerprint, ImgFprintError>)> = images
                 .par_iter()
-                .map_init(
-                    FingerprinterContext::new,
-                    |ctx, (id, bytes)| {
-                        (
-                            id.clone(),
-                            ctx.fingerprint_with(bytes, algorithm),
-                        )
-                    },
-                )
+                .map_init(FingerprinterContext::new, |ctx, (id, bytes)| {
+                    (id.clone(), ctx.fingerprint_with(bytes, algorithm))
+                })
                 .collect();
 
             #[cfg(feature = "tracing")]

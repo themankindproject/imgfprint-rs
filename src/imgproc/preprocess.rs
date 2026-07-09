@@ -93,17 +93,22 @@ pub fn bilinear_resample(
     assert!(
         src_w > 0 && src_h > 0 && dst_w > 0 && dst_h > 0,
         "bilinear_resample: dimensions must be non-zero (src: {}x{}, dst: {}x{})",
-        src_w, src_h, dst_w, dst_h
+        src_w,
+        src_h,
+        dst_w,
+        dst_h
     );
     assert!(
         src.len() >= src_w * src_h,
         "bilinear_resample: src buffer too small ({} < {})",
-        src.len(), src_w * src_h
+        src.len(),
+        src_w * src_h
     );
     assert!(
         dst.len() >= dst_w * dst_h,
         "bilinear_resample: dst buffer too small ({} < {})",
-        dst.len(), dst_w * dst_h
+        dst.len(),
+        dst_w * dst_h
     );
     // Fast path: identity resample (same dimensions) - just copy
     if src_w == dst_w && src_h == dst_h {

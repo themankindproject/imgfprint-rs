@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>imgfprint logo preview</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@300;400;500&display=swap');
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0c0c0d;
+    color: #e4e0db;
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+  }
+  .row {
+    display: flex;
+    gap: 3rem;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    margin: 2rem 0;
+  }
+  .card {
+    background: rgba(255,255,255,0.015);
+    border: 1px solid rgba(255,255,255,0.04);
+    border-radius: 12px;
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+  }
+  .card-label {
+    font-size: 0.65rem;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: #5a5450;
+  }
+  svg { display: block; }
+  .logo-mark svg { width: 120px; height: 120px; }
+  .logo-wordmark svg { width: 320px; height: 120px; }
+  .light {
+    background: #f5f2ed;
+    padding: 2rem;
+    border-radius: 12px;
+  }
+  .light .card-label { color: #9a9088; }
+  h2 {
+    font-family: 'DM Serif Display', Georgia, serif;
+    font-size: 1.5rem;
+    font-weight: 400;
+    color: #e4e0db;
+    margin-bottom: 1rem;
+  }
+  .light h2 { color: #2a2724; }
+</style>
+</head>
+<body>
+
+  <h2>Dark background</h2>
+  <div class="row">
+    <div class="card logo-mark">
+      <span class="card-label">Logo mark (88×88)</span>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 88 88" fill="none">
+        <rect x="0.5" y="0.5" width="87" height="87" rx="10" stroke="#d4835a" stroke-width="0.5" opacity="0.15"/>
+        <path d="M59 0.5 L87.5 29 L87.5 0.5 Z" fill="#d4835a" opacity="0.12"/>
+        <path d="M59 0.5 L87.5 29 L87.5 0.5 Z" stroke="#d4835a" stroke-width="0.6" opacity="0.3"/>
+        <path d="M22 68 C22 34 38 16 58 16 C78 16 82 36 80 58" stroke="#d4835a" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
+        <path d="M32 64 C32 38 42 22 58 22 C74 22 76 40 74 56" stroke="#d4835a" stroke-width="0.9" stroke-linecap="round" opacity="0.3"/>
+        <path d="M42 60 C42 42 48 28 58 28 C68 28 68 44 66 54" stroke="#d4835a" stroke-width="0.5" stroke-linecap="round" opacity="0.15"/>
+        <circle cx="58" cy="44" r="2.5" fill="#d4835a" opacity="0.35"/>
+        <circle cx="58" cy="44" r="1" fill="#d4835a" opacity="0.7"/>
+      </svg>
+    </div>
+    <div class="card logo-wordmark">
+      <span class="card-label">Horizontal lockup (240×88)</span>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 88" fill="none">
+        <rect x="0.5" y="0.5" width="87" height="87" rx="10" stroke="#d4835a" stroke-width="0.5" opacity="0.15"/>
+        <path d="M59 0.5 L87.5 29 L87.5 0.5 Z" fill="#d4835a" opacity="0.12"/>
+        <path d="M59 0.5 L87.5 29 L87.5 0.5 Z" stroke="#d4835a" stroke-width="0.6" opacity="0.3"/>
+        <path d="M22 68 C22 34 38 16 58 16 C78 16 82 36 80 58" stroke="#d4835a" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
+        <path d="M32 64 C32 38 42 22 58 22 C74 22 76 40 74 56" stroke="#d4835a" stroke-width="0.9" stroke-linecap="round" opacity="0.3"/>
+        <path d="M42 60 C42 42 48 28 58 28 C68 28 68 44 66 54" stroke="#d4835a" stroke-width="0.5" stroke-linecap="round" opacity="0.15"/>
+        <circle cx="58" cy="44" r="2.5" fill="#d4835a" opacity="0.35"/>
+        <circle cx="58" cy="44" r="1" fill="#d4835a" opacity="0.7"/>
+        <text x="106" y="46" font-family="Georgia,'Times New Roman',serif" font-size="28" font-weight="400" fill="#e4e0db" letter-spacing="-0.01">img</text>
+        <text x="144" y="46" font-family="Georgia,'Times New Roman',serif" font-size="28" font-style="italic" font-weight="400" fill="#d4835a" letter-spacing="-0.01">fprint</text>
+        <text x="106" y="68" font-family="system-ui,-apple-system,sans-serif" font-size="9" font-weight="400" fill="#5a5450" letter-spacing="0.18">IMAGE FINGERPRINTING FOR RUST</text>
+      </svg>
+    </div>
+  </div>
+
+  <h2 style="color:#2a2724; margin-top:1rem;">Light background</h2>
+  <div class="row light">
+    <div class="card logo-mark" style="background:transparent;border:none;padding:0;">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 88 88" fill="none">
+        <rect x="0.5" y="0.5" width="87" height="87" rx="10" stroke="#c47a55" stroke-width="0.5" opacity="0.25"/>
+        <path d="M59 0.5 L87.5 29 L87.5 0.5 Z" fill="#c47a55" opacity="0.18"/>
+        <path d="M59 0.5 L87.5 29 L87.5 0.5 Z" stroke="#c47a55" stroke-width="0.6" opacity="0.4"/>
+        <path d="M22 68 C22 34 38 16 58 16 C78 16 82 36 80 58" stroke="#c47a55" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+        <path d="M32 64 C32 38 42 22 58 22 C74 22 76 40 74 56" stroke="#c47a55" stroke-width="0.9" stroke-linecap="round" opacity="0.4"/>
+        <path d="M42 60 C42 42 48 28 58 28 C68 28 68 44 66 54" stroke="#c47a55" stroke-width="0.5" stroke-linecap="round" opacity="0.25"/>
+        <circle cx="58" cy="44" r="2.5" fill="#c47a55" opacity="0.4"/>
+        <circle cx="58" cy="44" r="1" fill="#c47a55" opacity="0.75"/>
+      </svg>
+    </div>
+    <div class="card logo-wordmark" style="background:transparent;border:none;padding:0;">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 88" fill="none">
+        <rect x="0.5" y="0.5" width="87" height="87" rx="10" stroke="#c47a55" stroke-width="0.5" opacity="0.25"/>
+        <path d="M59 0.5 L87.5 29 L87.5 0.5 Z" fill="#c47a55" opacity="0.18"/>
+        <path d="M59 0.5 L87.5 29 L87.5 0.5 Z" stroke="#c47a55" stroke-width="0.6" opacity="0.4"/>
+        <path d="M22 68 C22 34 38 16 58 16 C78 16 82 36 80 58" stroke="#c47a55" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+        <path d="M32 64 C32 38 42 22 58 22 C74 22 76 40 74 56" stroke="#c47a55" stroke-width="0.9" stroke-linecap="round" opacity="0.4"/>
+        <path d="M42 60 C42 42 48 28 58 28 C68 28 68 44 66 54" stroke="#c47a55" stroke-width="0.5" stroke-linecap="round" opacity="0.25"/>
+        <circle cx="58" cy="44" r="2.5" fill="#c47a55" opacity="0.4"/>
+        <circle cx="58" cy="44" r="1" fill="#c47a55" opacity="0.75"/>
+        <text x="106" y="46" font-family="Georgia,'Times New Roman',serif" font-size="28" font-weight="400" fill="#3a3633" letter-spacing="-0.01">img</text>
+        <text x="144" y="46" font-family="Georgia,'Times New Roman',serif" font-size="28" font-style="italic" font-weight="400" fill="#c47a55" letter-spacing="-0.01">fprint</text>
+        <text x="106" y="68" font-family="system-ui,-apple-system,sans-serif" font-size="9" font-weight="400" fill="#8a8078" letter-spacing="0.18">IMAGE FINGERPRINTING FOR RUST</text>
+      </svg>
+    </div>
+  </div>
+
+</body>
+</html>
