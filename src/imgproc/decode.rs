@@ -136,7 +136,26 @@ pub fn decode_image_with_config(
         }
     }
 
-    let image = image::load_from_memory(image_bytes).map_err(|e| match e {
+    // Use a reader with explicit decode limits to prevent decompression bombs.
+    // A malicious PNG/GIF within the 50 MiB input cap could otherwise decompress
+    // into gigabytes of RAM during decode.
+    let image = {
+        let mut reader = image::ImageReader::new(Cursor::new(image_bytes))
+            .with_guessed_format()
+            .map_err(|e| ImgFprintError::decode_error(format!("format detection failed: {}", e)))?;
+
+        let mut limits = image::Limits::default();
+        // Cap decoded pixel buffer: max_dimension² × 4 bytes (RGBA worst case).
+        // For the default 8192×8192 config this allows up to 256 MiB decode buffer,
+        // which is the absolute maximum a single legitimate image can require.
+        limits.max_alloc = Some(config.max_dimension as u64 * config.max_dimension as u64 * 4);
+        limits.max_image_width = Some(config.max_dimension);
+        limits.max_image_height = Some(config.max_dimension);
+        reader.limits(limits);
+
+        reader.decode()
+    }
+    .map_err(|e| match e {
         image::ImageError::Unsupported(format) => {
             ImgFprintError::UnsupportedFormat(format!("{:?}", format))
         }

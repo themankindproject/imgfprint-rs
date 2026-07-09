@@ -24,6 +24,12 @@
 
 use crate::error::ImgFprintError;
 
+/// Maximum supported embedding dimension (65536 floats = 256 KiB).
+///
+/// This cap prevents a malicious or misconfigured provider from returning
+/// a multi-gigabyte vector that exhausts memory.
+pub const MAX_EMBEDDING_DIMENSION: usize = 65_536;
+
 #[cfg(feature = "local-embedding")]
 pub mod local;
 
@@ -125,6 +131,14 @@ impl Embedding {
             return Err(ImgFprintError::InvalidEmbedding(
                 "embedding vector cannot be empty".to_string(),
             ));
+        }
+
+        if vector.len() > MAX_EMBEDDING_DIMENSION {
+            return Err(ImgFprintError::InvalidEmbedding(format!(
+                "embedding dimension {} exceeds maximum {}",
+                vector.len(),
+                MAX_EMBEDDING_DIMENSION
+            )));
         }
 
         if vector.iter().any(|&v| !v.is_finite()) {
@@ -255,7 +269,7 @@ impl Embedding {
 ///     }
 /// }
 /// ```
-pub trait EmbeddingProvider {
+pub trait EmbeddingProvider: Send + Sync {
     /// Generates a semantic embedding for the given image bytes.
     ///
     /// # Arguments

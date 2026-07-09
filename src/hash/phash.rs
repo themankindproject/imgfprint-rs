@@ -58,11 +58,8 @@ pub(crate) struct DctScratch {
 }
 
 impl Dct2Scratch {
-    #[inline(always)]
-    fn reset(&mut self) {
-        self.buffer = [0.0; DCT_SIZE];
-        self.complex_buffer = [Complex32::new(0.0, 0.0); 17];
-    }
+    // Note: No reset() needed — dct2_32_with_scratch fully overwrites both
+    // `buffer` and `complex_buffer` before reading any element.
 }
 
 impl DctScratch {
@@ -77,14 +74,15 @@ impl DctScratch {
         }
     }
 
+    /// Prepares scratch for reuse. The per-field zeroing is not strictly
+    /// required since `compute_phash_with_scratch` overwrites every buffer
+    /// before reading, but we zero `hash_matrix` defensively in case a
+    /// future code path reads fewer than TOTAL_HASH_ELEMENTS coefficients.
     #[inline(always)]
     fn reset(&mut self) {
-        self.dct2.reset();
-        self.row_buffer = [0.0; DCT_SIZE];
-        self.col_buffer = [0.0; DCT_SIZE * DCT_SIZE];
+        // Only zero hash_matrix defensively — all other buffers are fully
+        // overwritten by the DCT computation before being read.
         self.hash_matrix = [0.0; TOTAL_HASH_ELEMENTS];
-        self.col_input = [0.0; DCT_SIZE];
-        self.col_output = [0.0; DCT_SIZE];
     }
 }
 

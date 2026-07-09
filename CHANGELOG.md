@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`MAX_EMBEDDING_DIMENSION` constant**: Exported cap (65,536 floats = 256 KiB) that prevents a malicious or misconfigured provider from returning a multi-gigabyte vector. Enforced in `Embedding::new()` and `Embedding::new_with_model()`.
+
+### Changed
+
+- **`EmbeddingProvider` trait now requires `Send + Sync`**: Enables `Box<dyn EmbeddingProvider>` and `Arc<dyn EmbeddingProvider>` to be shared across threads, which is required for parallel batch embedding workflows.
+
+- **Decode-time decompression bomb protection**: `decode_image_with_config()` now configures `image::Limits` (max pixel allocation, max width/height) before decoding. Previously a crafted PNG within the 50 MiB input-size cap could decompress into multiple gigabytes of RAM. The limits are derived from `PreprocessConfig::max_dimension`.
+
+- **`bilinear_resample` bounds validation**: The public `bilinear_resample()` function now validates that source/destination buffers are large enough and dimensions are non-zero, panicking with a clear message instead of an opaque index-out-of-bounds.
+
+- **`DctScratch::reset()` optimization**: Reduced from ~5 KiB memset per hash to only zeroing the 64-byte `hash_matrix` defensively. All other scratch buffers are fully overwritten before read.
+
+- **Removed unnecessary `RefCell` in parallel batch**: `fingerprint_batch()` and `fingerprint_batch_with()` no longer wrap the per-thread `FingerprinterContext` in `RefCell`. Rayon's `map_init` already guarantees exclusive access, so the runtime borrow-checking overhead was pure waste.
+
+- **Single source of truth for `BLOCK_DISTANCE_THRESHOLD`**: `similarity.rs` now imports `DEFAULT_BLOCK_DISTANCE_THRESHOLD` from `fingerprint.rs` instead of defining its own private copy.
+
+- **Removed dead `has_simd` field from `FingerprinterContext`**: The field was stored but never read. CPU extension detection remains in `Preprocessor::new()` where it's actually used.
+
+### Migration Guide
+
+**`EmbeddingProvider: Send + Sync`** — If you implement `EmbeddingProvider` on a type that is *not* `Send + Sync` (e.g., wraps `Rc`, `Cell`, or a raw pointer), you will get a compile error. Fix by switching to thread-safe equivalents:
+
+```rust
+// Before (won't compile)
+struct MyProvider {
+    client: Rc<HttpClient>,  // Rc is !Send
+}
+
+// After
+struct MyProvider {
+    client: Arc<HttpClient>,  // Arc is Send + Sync
+}
+```
+
+Most providers (HTTP clients, ONNX model handles) are already `Send + Sync` — no change needed.
+
 ## [0.4.3] - 2026-06-23
 
 ### Added

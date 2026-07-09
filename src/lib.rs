@@ -96,7 +96,7 @@ pub use core::fingerprint::{
 };
 pub use core::fingerprinter::{FingerprinterContext, ImageFingerprinter};
 pub use core::similarity::Similarity;
-pub use embed::{semantic_similarity, Embedding, EmbeddingProvider};
+pub use embed::{semantic_similarity, Embedding, EmbeddingProvider, MAX_EMBEDDING_DIMENSION};
 pub use hash::algorithms::HashAlgorithm;
 pub use imgproc::decode::{
     decode_image, decode_image_with_config, PreprocessConfig, DEFAULT_MAX_DIMENSION,

@@ -5,7 +5,7 @@
 //! to *compare* pre-computed fingerprints (e.g., on embedded targets) can depend
 //! on this module without pulling in `std`, `image`, or any I/O.
 
-use crate::core::fingerprint::ImageFingerprint;
+use crate::core::fingerprint::{ImageFingerprint, DEFAULT_BLOCK_DISTANCE_THRESHOLD};
 use subtle::ConstantTimeEq;
 
 // NOTE: We use `subtle::ConstantTimeEq` for BLAKE3 hash comparison to prevent
@@ -20,7 +20,7 @@ use subtle::ConstantTimeEq;
 /// Blocks with distance above this threshold are excluded from the similarity
 /// calculation. This handles cropped images where some regions don't overlap.
 /// Lower values are stricter (fewer blocks qualify), higher values are looser.
-const BLOCK_DISTANCE_THRESHOLD: u32 = 32;
+const BLOCK_DISTANCE_THRESHOLD: u32 = DEFAULT_BLOCK_DISTANCE_THRESHOLD;
 
 /// Computes similarity from a Hamming distance.
 ///
