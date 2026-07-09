@@ -9,7 +9,7 @@ use crate::hash::phash::{
 };
 use crate::imgproc::decode::{decode_image_with_config, PreprocessConfig};
 use crate::imgproc::preprocess::{
-    extract_blocks_from_raw, extract_global_region_from_raw, get_cpu_extensions, Preprocessor,
+    extract_blocks_from_raw, extract_global_region_from_raw, Preprocessor,
 };
 use blake3::Hasher;
 use std::cell::RefCell;
@@ -98,8 +98,6 @@ fn count_results<S, T>(results: &[(S, Result<T, ImgFprintError>)]) -> (usize, us
 pub struct FingerprinterContext {
     preprocessor: Preprocessor,
     exact_hasher: Hasher,
-    #[allow(dead_code)]
-    has_simd: bool,
     dct_scratch: DctScratch,
 }
 
@@ -113,11 +111,9 @@ impl FingerprinterContext {
     /// Creates a new fingerprinter context with cached resources.
     #[must_use]
     pub fn new() -> Self {
-        let has_simd = get_cpu_extensions() != crate::imgproc::preprocess::CpuExtensions::None;
         Self {
             preprocessor: Preprocessor::new(),
             exact_hasher: Hasher::new(),
-            has_simd,
             dct_scratch: DctScratch::new(),
         }
     }
@@ -659,8 +655,8 @@ impl ImageFingerprinter {
             let results: Vec<(S, Result<MultiHashFingerprint, ImgFprintError>)> = images
                 .par_iter()
                 .map_init(
-                    || std::cell::RefCell::new(FingerprinterContext::new()),
-                    |ctx, (id, bytes)| (id.clone(), ctx.borrow_mut().fingerprint(bytes)),
+                    FingerprinterContext::new,
+                    |ctx, (id, bytes)| (id.clone(), ctx.fingerprint(bytes)),
                 )
                 .collect();
 
@@ -713,11 +709,11 @@ impl ImageFingerprinter {
             let results: Vec<(S, Result<ImageFingerprint, ImgFprintError>)> = images
                 .par_iter()
                 .map_init(
-                    || std::cell::RefCell::new(FingerprinterContext::new()),
+                    FingerprinterContext::new,
                     |ctx, (id, bytes)| {
                         (
                             id.clone(),
-                            ctx.borrow_mut().fingerprint_with(bytes, algorithm),
+                            ctx.fingerprint_with(bytes, algorithm),
                         )
                     },
                 )

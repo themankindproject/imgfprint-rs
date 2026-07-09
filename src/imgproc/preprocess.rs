@@ -71,12 +71,16 @@ const _: () = assert!(
 /// using bilinear interpolation. Used by AHash, PHash, and DHash algorithms.
 ///
 /// # Arguments
-/// * `src` - Source pixel buffer in row-major order
-/// * `src_w` - Source width
-/// * `src_h` - Source height
-/// * `dst` - Destination buffer (must be dst_w × dst_h elements)
-/// * `dst_w` - Destination width
-/// * `dst_h` - Destination height
+/// * `src` - Source pixel buffer in row-major order (must have at least `src_w * src_h` elements)
+/// * `src_w` - Source width (must be > 0)
+/// * `src_h` - Source height (must be > 0)
+/// * `dst` - Destination buffer (must have at least `dst_w * dst_h` elements)
+/// * `dst_w` - Destination width (must be > 0)
+/// * `dst_h` - Destination height (must be > 0)
+///
+/// # Panics
+///
+/// Panics if `src` or `dst` are shorter than required, or if any dimension is zero.
 #[inline(always)]
 pub fn bilinear_resample(
     src: &[f32],
@@ -86,6 +90,21 @@ pub fn bilinear_resample(
     dst_w: usize,
     dst_h: usize,
 ) {
+    assert!(
+        src_w > 0 && src_h > 0 && dst_w > 0 && dst_h > 0,
+        "bilinear_resample: dimensions must be non-zero (src: {}x{}, dst: {}x{})",
+        src_w, src_h, dst_w, dst_h
+    );
+    assert!(
+        src.len() >= src_w * src_h,
+        "bilinear_resample: src buffer too small ({} < {})",
+        src.len(), src_w * src_h
+    );
+    assert!(
+        dst.len() >= dst_w * dst_h,
+        "bilinear_resample: dst buffer too small ({} < {})",
+        dst.len(), dst_w * dst_h
+    );
     // Fast path: identity resample (same dimensions) - just copy
     if src_w == dst_w && src_h == dst_h {
         dst.copy_from_slice(&src[..dst_w * dst_h]);
