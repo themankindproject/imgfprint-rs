@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ImageFingerprint::coarse_key(bucket_bits)` for locality-sensitive bucketing**: Extracts the top `bucket_bits` of the global perceptual hash as a coarse partition key for multi-stage deduplication indexes. Places perceptually similar images into the same bucket so only same-bucket candidates need the expensive block-by-block comparison. Typical usage: `coarse_key(16)` for ~65K buckets over million-image corpora. Closes #29.
+
 - **`MAX_EMBEDDING_DIMENSION` constant**: Exported cap (65,536 floats = 256 KiB) that prevents a malicious or misconfigured provider from returning a multi-gigabyte vector. Enforced in `Embedding::new()` and `Embedding::new_with_model()`.
 
 ### Changed
@@ -16,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`EmbeddingProvider` trait now requires `Send + Sync`**: Enables `Box<dyn EmbeddingProvider>` and `Arc<dyn EmbeddingProvider>` to be shared across threads, which is required for parallel batch embedding workflows.
 
 - **Decode-time decompression bomb protection**: `decode_image_with_config()` now configures `image::Limits` (max pixel allocation, max width/height) before decoding. Previously a crafted PNG within the 50 MiB input-size cap could decompress into multiple gigabytes of RAM. The limits are derived from `PreprocessConfig::max_dimension`.
+
+- **Branchless block similarity with lookup table**: `compute_block_similarity_with_threshold` now uses a compile-time `const SIM_TABLE: [f32; 65]` lookup (eliminates per-iteration `1.0 - d/64.0` division), branchless masked accumulation (eliminates branch mispredicts on the `distance <= threshold` check), and dual accumulators (breaks the FPU serial dependency chain). Output is bit-identical to the previous implementation. Closes #28.
 
 - **`bilinear_resample` bounds validation**: The public `bilinear_resample()` function now validates that source/destination buffers are large enough and dimensions are non-zero, panicking with a clear message instead of an opaque index-out-of-bounds.
 

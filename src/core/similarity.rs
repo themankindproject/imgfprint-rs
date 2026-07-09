@@ -200,16 +200,45 @@ pub fn compute_block_similarity_with_threshold(
     b: &[u64; 16],
     max_distance: u32,
 ) -> f32 {
-    let mut total_similarity = 0.0f32;
-    let mut valid_comparisons = 0u32;
+    // Pre-computed similarity table: SIM_TABLE[d] = 1.0 - d/64.0 for d in 0..=64.
+    // Eliminates per-iteration floating-point division.
+    const SIM_TABLE: [f32; 65] = {
+        let mut t = [0.0f32; 65];
+        let mut i = 0u32;
+        while i < 65 {
+            // 1.0 - i/64.0, computed at compile time
+            t[i as usize] = 1.0 - i as f32 / 64.0;
+            i += 1;
+        }
+        t
+    };
+
+    // Branchless accumulation with two parallel accumulators to break
+    // the FPU dependency chain and allow pipelined execution.
+    let mut total_a = 0.0f32;
+    let mut total_b = 0.0f32;
+    let mut count_a = 0u32;
+    let mut count_b = 0u32;
 
     for i in 0..16 {
         let distance = hamming_distance(a[i], b[i]);
-        if distance <= max_distance {
-            total_similarity += hash_similarity(distance);
-            valid_comparisons += 1;
+        // Branchless: convert bool to 0.0/1.0 mask
+        let valid = (distance <= max_distance) as u32;
+        let weight = valid as f32;
+        let sim = SIM_TABLE[distance as usize];
+
+        // Alternate between accumulators to break serial dependency
+        if i & 1 == 0 {
+            total_a += sim * weight;
+            count_a += valid;
+        } else {
+            total_b += sim * weight;
+            count_b += valid;
         }
     }
+
+    let total_similarity = total_a + total_b;
+    let valid_comparisons = count_a + count_b;
 
     if valid_comparisons == 0 {
         0.0
