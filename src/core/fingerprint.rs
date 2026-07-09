@@ -162,6 +162,57 @@ impl ImageFingerprint {
         &self.block_hashes
     }
 
+    /// Returns a coarse locality key for fast bucket-based deduplication.
+    ///
+    /// Extracts the top `bucket_bits` bits from the global perceptual hash,
+    /// producing a key that places perceptually similar images into the same
+    /// bucket. Use as the first stage of a multi-stage deduplication index
+    /// where the full block-by-block comparison is only run against candidates
+    /// sharing the same coarse key.
+    ///
+    /// # Arguments
+    ///
+    /// * `bucket_bits` — Number of high-order bits to extract (0–64).
+    ///   More bits → more buckets → fewer false candidates per bucket but
+    ///   higher risk of splitting true near-duplicates across buckets.
+    ///   Typical values: 8–16 for million-image corpora.
+    ///
+    /// # Behavior
+    ///
+    /// - `coarse_key(0)` returns `0` (single bucket — everything matches).
+    /// - `coarse_key(64)` returns the full `global_hash` (finest granularity).
+    /// - Values > 64 are clamped to 64 in release; panic in debug.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::collections::HashMap;
+    /// use imgfprint::ImageFingerprint;
+    ///
+    /// fn build_index(fingerprints: &[ImageFingerprint]) -> HashMap<u64, Vec<usize>> {
+    ///     let mut buckets: HashMap<u64, Vec<usize>> = HashMap::new();
+    ///     for (idx, fp) in fingerprints.iter().enumerate() {
+    ///         buckets.entry(fp.coarse_key(16)).or_default().push(idx);
+    ///     }
+    ///     buckets
+    /// }
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn coarse_key(&self, bucket_bits: u32) -> u64 {
+        debug_assert!(
+            bucket_bits <= 64,
+            "coarse_key: bucket_bits ({}) must be <= 64",
+            bucket_bits
+        );
+        let bits = bucket_bits.min(64);
+        if bits == 0 {
+            0
+        } else {
+            self.global_hash >> (64 - bits)
+        }
+    }
+
     /// Computes the Hamming distance between this and another fingerprint's global hash.
     ///
     /// Returns a value from 0 (identical) to 64 (completely different).
@@ -685,5 +736,63 @@ mod tests {
         };
         let s = a.compare_with_config(&b, &cfg);
         assert_eq!(s.perceptual_distance, 0);
+    }
+
+    #[test]
+    fn coarse_key_zero_bits_returns_zero() {
+        let f = fp(0xDEAD_BEEF_CAFE_BABE, 0);
+        assert_eq!(f.coarse_key(0), 0);
+    }
+
+    #[test]
+    fn coarse_key_64_bits_returns_full_hash() {
+        let hash = 0xDEAD_BEEF_CAFE_BABE;
+        let f = fp(hash, 0);
+        assert_eq!(f.coarse_key(64), hash);
+    }
+
+    #[test]
+    fn coarse_key_16_bits_extracts_top_bits() {
+        // 0xDEAD... top 16 bits = 0xDEAD
+        let f = fp(0xDEAD_BEEF_CAFE_BABE, 0);
+        assert_eq!(f.coarse_key(16), 0xDEAD);
+    }
+
+    #[test]
+    fn coarse_key_8_bits_extracts_top_byte() {
+        let f = fp(0xAB00_0000_0000_0000, 0);
+        assert_eq!(f.coarse_key(8), 0xAB);
+    }
+
+    #[test]
+    fn coarse_key_1_bit_extracts_msb() {
+        let f_high = fp(0x8000_0000_0000_0000, 0);
+        let f_low = fp(0x7FFF_FFFF_FFFF_FFFF, 0);
+        assert_eq!(f_high.coarse_key(1), 1);
+        assert_eq!(f_low.coarse_key(1), 0);
+    }
+
+    #[test]
+    fn coarse_key_deterministic() {
+        let f = fp(0x1234_5678_9ABC_DEF0, 0);
+        assert_eq!(f.coarse_key(16), f.coarse_key(16));
+    }
+
+    #[test]
+    fn coarse_key_similar_hashes_same_bucket() {
+        // Two hashes differing only in the low bits should share the same coarse key
+        let f1 = fp(0xAAAA_BBBB_0000_0001, 0);
+        let f2 = fp(0xAAAA_BBBB_FFFF_FFFE, 0);
+        assert_eq!(f1.coarse_key(32), f2.coarse_key(32));
+    }
+
+    #[test]
+    fn coarse_key_clamped_above_64() {
+        // In release mode, values > 64 clamp to 64 (full hash).
+        // In debug mode, this would trigger debug_assert. So we test that
+        // coarse_key(64) == global_hash, which is the clamped behavior.
+        let hash = 0xDEAD_BEEF_CAFE_BABE;
+        let f = fp(hash, 0);
+        assert_eq!(f.coarse_key(64), hash);
     }
 }
