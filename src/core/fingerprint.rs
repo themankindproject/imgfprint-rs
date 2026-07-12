@@ -252,9 +252,6 @@ impl ImageFingerprint {
             (0.0..=1.0).contains(&threshold),
             "threshold must be in range [0.0, 1.0], got {threshold}"
         );
-        if self.exact == other.exact {
-            return true;
-        }
         let clamped_threshold = threshold.clamp(0.0, 1.0);
         let sim = crate::core::similarity::compute_similarity(self, other);
         sim.score >= clamped_threshold

@@ -137,9 +137,6 @@ pub fn compute_similarity_with_weights(
 ) -> Similarity {
     let exact_match = a.exact.ct_eq(&b.exact).into();
 
-    let combined_score = compute_score_only(a, b, global_weight, block_weight, block_threshold);
-    let global_distance = hamming_distance(a.global_hash, b.global_hash);
-
     if exact_match {
         Similarity {
             score: 1.0,
@@ -147,6 +144,8 @@ pub fn compute_similarity_with_weights(
             perceptual_distance: 0,
         }
     } else {
+        let combined_score = compute_score_only(a, b, global_weight, block_weight, block_threshold);
+        let global_distance = hamming_distance(a.global_hash, b.global_hash);
         Similarity {
             score: combined_score,
             exact_match: false,
