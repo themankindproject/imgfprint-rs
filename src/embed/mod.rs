@@ -45,7 +45,7 @@ pub use local::{LocalProvider, LocalProviderConfig};
 /// # Immutability
 ///
 /// Once created, embeddings are immutable. The vector can be accessed
-/// via [`as_slice()`](Embedding::as_slice) or [`vector()`](Embedding::vector).
+/// via [`as_slice()`](Embedding::as_slice) or [`to_vec()`](Embedding::to_vec).
 ///
 /// # Validation
 ///
@@ -194,12 +194,12 @@ impl Embedding {
     ///
     /// # fn example() -> Result<(), imgfprint::ImgFprintError> {
     /// let embedding = Embedding::new(vec![0.1, 0.2, 0.3])?;
-    /// let vec = embedding.vector();
+    /// let vec = embedding.to_vec();
     /// assert_eq!(vec, vec![0.1, 0.2, 0.3]);
     /// # Ok(())
     /// # }
     /// ```
-    pub fn vector(&self) -> Vec<f32> {
+    pub fn to_vec(&self) -> Vec<f32> {
         self.vector.clone()
     }
 
@@ -404,7 +404,7 @@ mod tests {
         assert_eq!(embedding.len(), 4);
         assert_eq!(embedding.dimension(), 4);
         assert_eq!(embedding.as_slice(), &vector);
-        assert_eq!(embedding.vector(), vector);
+        assert_eq!(embedding.to_vec(), vector);
     }
 
     #[test]
