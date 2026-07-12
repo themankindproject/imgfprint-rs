@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Optimization and timing safety in exact hash comparisons**: Removed a redundant and non-constant-time exact hash check `self.exact == other.exact` in `ImageFingerprint::is_similar`. Instead, the check is fully delegated to `compute_similarity_with_weights`, which performs it securely in constant-time using `ct_eq`. Additionally, `compute_similarity_with_weights` now returns early immediately upon detecting an exact match, avoiding redundant global and block-level perceptual distance computations. Closes #2.
 - **Renamed `Embedding::vector()` to `to_vec()`**: Conforms to standard Rust naming guidelines for methods that convert/clone inner data into an owned `Vec`. Closes #3.
 
 - **`EmbeddingProvider` trait now requires `Send + Sync`**: Enables `Box<dyn EmbeddingProvider>` and `Arc<dyn EmbeddingProvider>` to be shared across threads, which is required for parallel batch embedding workflows.
