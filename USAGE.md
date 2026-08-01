@@ -909,6 +909,75 @@ println!("Generated {}-dimensional embedding", embedding.len());
 
 ---
 
+## Exact Hash Semantics
+
+The `exact_hash` field in both `ImageFingerprint` and `MultiHashFingerprint` is a BLAKE3 digest used for exact-match detection, but **what it hashes depends on which API you used**:
+
+| Method | Input to BLAKE3 | Use Case |
+|--------|-----------------|----------|
+| `fingerprint(&bytes)` | Raw compressed file bytes | Byte-identical file deduplication |
+| `fingerprint_image(&image)` | Decoded RGB8 pixel buffer | Pixel-identical image deduplication |
+
+### Implications
+
+- **`fingerprint()`**: Two files with identical pixels but different encodings (e.g., the same photo saved as PNG twice with different compression settings, or as PNG vs JPEG) will have **different** exact hashes.
+- **`fingerprint_image()`**: Two `DynamicImage` values with the same pixel data always produce the **same** exact hash, regardless of how they were originally encoded.
+
+### Example: Demonstrating the Difference
+
+```rust
+use imgfprint::ImageFingerprinter;
+use image::{ImageBuffer, Rgb, DynamicImage};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create a simple image programmatically
+    let img = ImageBuffer::from_fn(64, 64, |x, y| {
+        Rgb([(x * 4) as u8, (y * 4) as u8, 128u8])
+    });
+    let dynamic = DynamicImage::ImageRgb8(img.clone());
+
+    // Encode the same pixels to PNG bytes twice.
+    // Depending on the encoder, the file bytes may differ
+    // (e.g., different timestamps in metadata, or non-deterministic compression).
+    let mut buf1 = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut buf1), image::ImageFormat::Png)?;
+    let mut buf2 = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut buf2), image::ImageFormat::Png)?;
+
+    // Via fingerprint() — hashes the raw file bytes
+    let fp_bytes1 = ImageFingerprinter::fingerprint(&buf1)?;
+    let fp_bytes2 = ImageFingerprinter::fingerprint(&buf2)?;
+    // If buf1 == buf2 (deterministic encoder), exact hashes match.
+    // If buf1 != buf2 (non-deterministic encoder), exact hashes differ.
+    println!("fingerprint() exact match: {}", fp_bytes1.exact_hash() == fp_bytes2.exact_hash());
+
+    // Via fingerprint_image() — hashes decoded RGB8 pixels
+    let fp_img1 = ImageFingerprinter::fingerprint_image(&dynamic)?;
+    let fp_img2 = ImageFingerprinter::fingerprint_image(&dynamic)?;
+    // Always matches — same pixels, same hash
+    assert_eq!(fp_img1.exact_hash(), fp_img2.exact_hash());
+    println!("fingerprint_image() exact match: true");
+
+    // Cross-API comparison: file-byte hash ≠ pixel hash
+    assert_ne!(fp_bytes1.exact_hash(), fp_img1.exact_hash());
+    println!("fingerprint() vs fingerprint_image() exact hashes differ: true");
+
+    // Perceptual hashes are the same regardless of API used
+    assert_eq!(fp_bytes1.phash().global_hash(), fp_img1.phash().global_hash());
+    println!("Perceptual hashes match across both APIs: true");
+
+    Ok(())
+}
+```
+
+### When to Use Which
+
+- **File deduplication** (e.g., "have I already ingested this exact file?") → `fingerprint()`
+- **Pixel deduplication** (e.g., "is this the same image content, regardless of encoding?") → `fingerprint_image()`
+- **Perceptual similarity** (e.g., "do these look alike?") → Either API; perceptual hashes are computed from the same normalized pixel data in both cases.
+
+---
+
 ## Error Handling
 
 All operations return `Result<T, ImgFprintError>`. The library never panics on malformed input.

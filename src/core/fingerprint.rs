@@ -105,6 +105,16 @@ impl Default for MultiHashConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct ImageFingerprint {
+    /// BLAKE3 hash for exact-match detection.
+    ///
+    /// **Semantics depend on the construction path:**
+    /// - When produced by [`ImageFingerprinter::fingerprint`] (or any method
+    ///   accepting `&[u8]` file bytes), this is the BLAKE3 digest of the raw
+    ///   compressed file bytes. Different encodings of the same pixels yield
+    ///   different values.
+    /// - When produced by [`ImageFingerprinter::fingerprint_image`] (accepting
+    ///   a decoded `DynamicImage`), this is the BLAKE3 digest of the RGB8
+    ///   pixel buffer. Identical pixels always yield the same value.
     pub(crate) exact: [u8; 32],
     pub(crate) global_hash: u64,
     pub(crate) block_hashes: [u64; 16],
@@ -297,6 +307,15 @@ impl core::fmt::Display for ImageFingerprint {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct MultiHashFingerprint {
+    /// BLAKE3 hash for exact-match detection.
+    ///
+    /// **Semantics depend on the construction path:**
+    /// - Via [`ImageFingerprinter::fingerprint`]: BLAKE3 of raw compressed
+    ///   file bytes. Two files with identical pixels but different encodings
+    ///   produce different values.
+    /// - Via [`ImageFingerprinter::fingerprint_image`]: BLAKE3 of the decoded
+    ///   RGB8 pixel buffer. Identical pixels always produce the same value,
+    ///   regardless of the original encoding.
     pub(crate) exact: [u8; 32],
     pub(crate) ahash: ImageFingerprint,
     pub(crate) phash: ImageFingerprint,

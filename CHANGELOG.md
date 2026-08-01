@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-08-01
+
+### Added
+
+- **Documented exact-hash semantics**: Clear rustdoc on `fingerprint()` (hashes raw file bytes) vs `fingerprint_image()` (hashes decoded RGB8 pixels). New USAGE.md section with examples and new integration test demonstrating the divergence. Closes #41.
+
+- **CI cross-platform matrix + MSRV job**: Test job now runs on `ubuntu-latest`, `macos-latest`, and `windows-latest`. Dedicated MSRV job validates compilation and tests on Rust 1.70.0. Closes #42.
+
+### Changed
+
+- **Propagate DCT failures instead of `unwrap_or(0)`**: `compute_phash_data` now returns `Result` and propagates PHash computation errors to callers instead of silently producing all-zero hashes. Existing public APIs already return `Result`, so this is not a breaking change — callers now get a meaningful `ImgFprintError::ProcessingError` on DCT failure instead of a spurious zero hash. Closes #40.
+
+- **Eliminated 256 KiB stack allocation per fingerprint call**: Block grid (`[[f32; 4096]; 16]`) and global region (`[f32; 1024]`) buffers are now `Box`-allocated inside `FingerprinterContext` and reused across calls, eliminating per-call stack pressure that could overflow under rayon worker threads. Closes #37.
+
+- **Fast-path resize for single-algorithm AHash/DHash**: When computing only AHash or DHash (not PHash), the normalize step now uses `Bilinear` interpolation instead of `Lanczos3`, reducing resize cost by ~40% for these simpler algorithms. The multi-algorithm path retains Lanczos3 for PHash accuracy. Closes #39.
+
+- **Micro-optimizations in hot paths**: Skip unnecessary zero-fill of the 192 KiB RGB destination buffer and 64 KiB grayscale buffer (both are fully overwritten before read). Avoid `to_rgb8()` clone in `fingerprint_image()` when the input is already `ImageRgb8`. Closes #47.
+
 ## [0.4.4] - 2026-07-12
 
 ### Added

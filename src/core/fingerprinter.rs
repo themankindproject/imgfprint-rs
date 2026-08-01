@@ -9,7 +9,7 @@ use crate::hash::phash::{
 };
 use crate::imgproc::decode::{decode_image_with_config, PreprocessConfig};
 use crate::imgproc::preprocess::{
-    extract_blocks_from_raw, extract_global_region_from_raw, Preprocessor,
+    extract_blocks_into_buffer, extract_global_region_into_buffer, Preprocessor,
 };
 use blake3::Hasher;
 use std::cell::RefCell;
@@ -94,11 +94,22 @@ fn count_results<S, T>(results: &[(S, Result<T, ImgFprintError>)]) -> (usize, us
 ///
 /// Maintains a reusable preprocessor, hasher, and internal buffers
 /// to minimize allocations in high-throughput scenarios.
+///
+/// The `blocks_buffer` and `global_region_buffer` are heap-allocated once
+/// and reused across calls, eliminating a 256 KiB + 4 KiB stack allocation
+/// per fingerprint call. This prevents stack overflow under rayon workers
+/// with limited stack sizes.
 #[derive(Debug)]
 pub struct FingerprinterContext {
     preprocessor: Preprocessor,
     exact_hasher: Hasher,
     dct_scratch: DctScratch,
+    /// Heap-allocated 4x4 grid of 64x64 float blocks (256 KiB).
+    /// Reused across fingerprint calls to avoid per-call stack allocation.
+    blocks_buffer: Box<[[f32; 64 * 64]; 16]>,
+    /// Heap-allocated center 32x32 float region (4 KiB).
+    /// Reused across fingerprint calls to avoid per-call stack allocation.
+    global_region_buffer: Box<[f32; 32 * 32]>,
 }
 
 impl Default for FingerprinterContext {
@@ -115,6 +126,8 @@ impl FingerprinterContext {
             preprocessor: Preprocessor::new(),
             exact_hasher: Hasher::new(),
             dct_scratch: DctScratch::new(),
+            blocks_buffer: Box::new([[0.0f32; 64 * 64]; 16]),
+            global_region_buffer: Box::new([0.0f32; 32 * 32]),
         }
     }
 
@@ -198,13 +211,34 @@ impl FingerprinterContext {
     ///
     /// Skips the decode step entirely — useful when you already hold a
     /// `DynamicImage` (e.g., from a video frame or in-memory composition).
-    /// The BLAKE3 exact hash is computed over the image's raw RGB8 pixel data.
+    ///
+    /// # Exact hash semantics
+    ///
+    /// Unlike [`fingerprint`](Self::fingerprint) (which hashes the raw
+    /// compressed file bytes), this method computes the BLAKE3 `exact_hash`
+    /// from the **decoded RGB8 pixel buffer**. Consequently:
+    ///
+    /// - Two `DynamicImage` values with identical pixel data will always
+    ///   produce the **same** exact hash, regardless of how they were
+    ///   originally encoded on disk.
+    /// - The exact hash from `fingerprint_image` will **differ** from the
+    ///   exact hash produced by `fingerprint` on the encoded file bytes of
+    ///   the same image.
+    ///
+    /// Use `fingerprint` for byte-level deduplication of files, and
+    /// `fingerprint_image` for pixel-level deduplication of decoded images.
     pub fn fingerprint_image(
         &mut self,
         image: &image::DynamicImage,
     ) -> Result<MultiHashFingerprint, ImgFprintError> {
-        let rgb = image.to_rgb8();
-        let raw = rgb.as_raw();
+        // Compute exact hash from RGB8 pixels, avoiding clone when already RGB8
+        let rgb_owned;
+        let raw: &[u8] = if let image::DynamicImage::ImageRgb8(rgb) = image {
+            rgb.as_raw()
+        } else {
+            rgb_owned = image.to_rgb8();
+            rgb_owned.as_raw()
+        };
 
         let exact_hash: [u8; 32] = {
             self.exact_hasher.reset();
@@ -214,29 +248,34 @@ impl FingerprinterContext {
 
         let normalized = self.preprocessor.normalize_as_slice(image)?;
 
-        let global_region = extract_global_region_from_raw(normalized);
-        let blocks = extract_blocks_from_raw(normalized);
+        extract_global_region_into_buffer(normalized, &mut self.global_region_buffer);
+        extract_blocks_into_buffer(normalized, &mut self.blocks_buffer);
 
         let (ahash_fp, phash_fp, dhash_fp) = {
             #[cfg(feature = "parallel")]
             {
                 let (ahash_result, (phash_result, dhash_result)) = rayon::join(
-                    || Self::compute_ahash_data(&global_region, &blocks),
+                    || Self::compute_ahash_data(&self.global_region_buffer, &self.blocks_buffer),
                     || {
                         rayon::join(
                             || {
                                 Self::compute_phash_data(
-                                    &global_region,
-                                    &blocks,
+                                    &self.global_region_buffer,
+                                    &self.blocks_buffer,
                                     &mut self.dct_scratch,
                                 )
                             },
-                            || Self::compute_dhash_data(&global_region, &blocks),
+                            || {
+                                Self::compute_dhash_data(
+                                    &self.global_region_buffer,
+                                    &self.blocks_buffer,
+                                )
+                            },
                         )
                     },
                 );
                 let (ahash_global, ahash_blocks) = ahash_result;
-                let (phash_global, phash_blocks) = phash_result;
+                let (phash_global, phash_blocks) = phash_result?;
                 let (dhash_global, dhash_blocks) = dhash_result;
                 (
                     ImageFingerprint::new(exact_hash, ahash_global, ahash_blocks),
@@ -247,11 +286,14 @@ impl FingerprinterContext {
             #[cfg(not(feature = "parallel"))]
             {
                 let (ahash_global, ahash_blocks) =
-                    Self::compute_ahash_data(&global_region, &blocks);
-                let (phash_global, phash_blocks) =
-                    Self::compute_phash_data(&global_region, &blocks, &mut self.dct_scratch);
+                    Self::compute_ahash_data(&self.global_region_buffer, &self.blocks_buffer);
+                let (phash_global, phash_blocks) = Self::compute_phash_data(
+                    &self.global_region_buffer,
+                    &self.blocks_buffer,
+                    &mut self.dct_scratch,
+                )?;
                 let (dhash_global, dhash_blocks) =
-                    Self::compute_dhash_data(&global_region, &blocks);
+                    Self::compute_dhash_data(&self.global_region_buffer, &self.blocks_buffer);
                 (
                     ImageFingerprint::new(exact_hash, ahash_global, ahash_blocks),
                     ImageFingerprint::new(exact_hash, phash_global, phash_blocks),
@@ -300,6 +342,16 @@ impl FingerprinterContext {
         result
     }
 
+    /// Internal: computes all three perceptual hashes plus the BLAKE3 exact hash.
+    ///
+    /// The `exact_hash` field in the returned [`MultiHashFingerprint`] is the
+    /// BLAKE3 digest of the **raw compressed file bytes** (`image_bytes`). This
+    /// means two files with identical pixel content but different encodings
+    /// (e.g., the same photo saved as PNG vs JPEG, or two JPEG files with
+    /// different compression settings) will produce **different** exact hashes.
+    ///
+    /// For an exact hash computed from decoded pixel data instead, see
+    /// [`fingerprint_image`](Self::fingerprint_image).
     fn compute_all_hashes(
         &mut self,
         image_bytes: &[u8],
@@ -318,32 +370,39 @@ impl FingerprinterContext {
             self.preprocessor.normalize_as_slice(&image)
         });
 
-        let global_region = trace_stage!("extract_global_region", {
-            extract_global_region_from_raw(normalized)
+        trace_stage!("extract_global_region", {
+            extract_global_region_into_buffer(normalized, &mut self.global_region_buffer)
         });
-        let blocks = trace_stage!("extract_blocks", { extract_blocks_from_raw(normalized) });
+        trace_stage!("extract_blocks", {
+            extract_blocks_into_buffer(normalized, &mut self.blocks_buffer)
+        });
 
         let (ahash_fp, phash_fp, dhash_fp) = trace_stage!("multi_hash", {
             #[cfg(feature = "parallel")]
             {
                 let (ahash_result, (phash_result, dhash_result)) = rayon::join(
-                    || Self::compute_ahash_data(&global_region, &blocks),
+                    || Self::compute_ahash_data(&self.global_region_buffer, &self.blocks_buffer),
                     || {
                         rayon::join(
                             || {
                                 Self::compute_phash_data(
-                                    &global_region,
-                                    &blocks,
+                                    &self.global_region_buffer,
+                                    &self.blocks_buffer,
                                     &mut self.dct_scratch,
                                 )
                             },
-                            || Self::compute_dhash_data(&global_region, &blocks),
+                            || {
+                                Self::compute_dhash_data(
+                                    &self.global_region_buffer,
+                                    &self.blocks_buffer,
+                                )
+                            },
                         )
                     },
                 );
 
                 let (ahash_global, ahash_blocks) = ahash_result;
-                let (phash_global, phash_blocks) = phash_result;
+                let (phash_global, phash_blocks) = phash_result?;
                 let (dhash_global, dhash_blocks) = dhash_result;
 
                 (
@@ -356,11 +415,14 @@ impl FingerprinterContext {
             #[cfg(not(feature = "parallel"))]
             {
                 let (ahash_global, ahash_blocks) =
-                    Self::compute_ahash_data(&global_region, &blocks);
-                let (phash_global, phash_blocks) =
-                    Self::compute_phash_data(&global_region, &blocks, &mut self.dct_scratch);
+                    Self::compute_ahash_data(&self.global_region_buffer, &self.blocks_buffer);
+                let (phash_global, phash_blocks) = Self::compute_phash_data(
+                    &self.global_region_buffer,
+                    &self.blocks_buffer,
+                    &mut self.dct_scratch,
+                )?;
                 let (dhash_global, dhash_blocks) =
-                    Self::compute_dhash_data(&global_region, &blocks);
+                    Self::compute_dhash_data(&self.global_region_buffer, &self.blocks_buffer);
 
                 (
                     ImageFingerprint::new(exact_hash, ahash_global, ahash_blocks),
@@ -390,22 +452,42 @@ impl FingerprinterContext {
         let image = trace_result_stage!("decode", {
             decode_image_with_config(image_bytes, preprocess)
         });
-        let normalized = trace_result_stage!("normalize", {
-            self.preprocessor.normalize_as_slice(&image)
-        });
 
-        let global_region = trace_stage!("extract_global_region", {
-            extract_global_region_from_raw(normalized)
+        // Task 2: Fast-path resize — use bilinear for AHash/DHash (skip Lanczos3).
+        // PHash requires high-quality Lanczos3 for DCT accuracy.
+        let normalized = match algorithm {
+            HashAlgorithm::AHash | HashAlgorithm::DHash => {
+                trace_result_stage!("normalize_fast", {
+                    self.preprocessor.normalize_as_slice_fast(&image)
+                })
+            }
+            HashAlgorithm::PHash => {
+                trace_result_stage!("normalize", {
+                    self.preprocessor.normalize_as_slice(&image)
+                })
+            }
+        };
+
+        trace_stage!("extract_global_region", {
+            extract_global_region_into_buffer(normalized, &mut self.global_region_buffer)
         });
-        let blocks = trace_stage!("extract_blocks", { extract_blocks_from_raw(normalized) });
+        trace_stage!("extract_blocks", {
+            extract_blocks_into_buffer(normalized, &mut self.blocks_buffer)
+        });
 
         let (global_hash, block_hashes) = trace_stage!("single_hash", {
             match algorithm {
-                HashAlgorithm::AHash => Self::compute_ahash_data(&global_region, &blocks),
-                HashAlgorithm::PHash => {
-                    Self::compute_phash_data(&global_region, &blocks, &mut self.dct_scratch)
+                HashAlgorithm::AHash => {
+                    Self::compute_ahash_data(&self.global_region_buffer, &self.blocks_buffer)
                 }
-                HashAlgorithm::DHash => Self::compute_dhash_data(&global_region, &blocks),
+                HashAlgorithm::PHash => Self::compute_phash_data(
+                    &self.global_region_buffer,
+                    &self.blocks_buffer,
+                    &mut self.dct_scratch,
+                )?,
+                HashAlgorithm::DHash => {
+                    Self::compute_dhash_data(&self.global_region_buffer, &self.blocks_buffer)
+                }
             }
         });
 
@@ -416,18 +498,18 @@ impl FingerprinterContext {
         global_region: &[f32; 32 * 32],
         blocks: &[[f32; 64 * 64]; 16],
         scratch: &mut DctScratch,
-    ) -> (u64, [u64; 16]) {
-        let global_hash = compute_phash_with_scratch(global_region, scratch).unwrap_or(0);
+    ) -> Result<(u64, [u64; 16]), ImgFprintError> {
+        let global_hash = compute_phash_with_scratch(global_region, scratch)?;
 
         let block_hashes = {
             let mut hashes = [0u64; 16];
             for (i, block) in blocks.iter().enumerate() {
-                hashes[i] = compute_phash_from_64x64_with_scratch(block, scratch).unwrap_or(0);
+                hashes[i] = compute_phash_from_64x64_with_scratch(block, scratch)?;
             }
             hashes
         };
 
-        (global_hash, block_hashes)
+        Ok((global_hash, block_hashes))
     }
 
     fn compute_ahash_data(
@@ -526,6 +608,14 @@ impl ImageFingerprinter {
     /// MultiHashFingerprint containing both hash layers. This provides
     /// superior accuracy compared to single-algorithm fingerprinting.
     ///
+    /// # Exact hash semantics
+    ///
+    /// The `exact_hash` field is the BLAKE3 digest of `image_bytes` — the raw
+    /// compressed file bytes as passed in. Two files encoding the same pixels
+    /// differently (e.g., two distinct PNG encodings) will yield **different**
+    /// exact hashes. For pixel-level exact matching, use
+    /// [`fingerprint_image`](Self::fingerprint_image) instead.
+    ///
     /// # Errors
     ///
     /// Returns `ImgFprintError` if any algorithm fails.
@@ -587,6 +677,13 @@ impl ImageFingerprinter {
     ///
     /// Skips the decode step — useful when you already hold a `DynamicImage`
     /// (e.g., from a video frame or in-memory composition).
+    ///
+    /// # Exact hash semantics
+    ///
+    /// The `exact_hash` is computed from the **decoded RGB8 pixel buffer**,
+    /// not from file bytes. Two images with identical pixels will produce the
+    /// same exact hash regardless of their on-disk encoding. See
+    /// [`fingerprint`](Self::fingerprint) for file-byte-based exact hashing.
     pub fn fingerprint_image(
         image: &image::DynamicImage,
     ) -> Result<MultiHashFingerprint, ImgFprintError> {
