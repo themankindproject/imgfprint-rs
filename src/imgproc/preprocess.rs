@@ -592,7 +592,9 @@ unsafe fn rgb_to_grayscale_neon(rgb: &[u8], gray: &mut [u8]) {
 /// Extracts center 32x32 region as normalized float buffer.
 #[inline]
 #[cfg(test)]
-pub(crate) fn extract_global_region(image: &GrayImage) -> [f32; (PHASH_SIZE * PHASH_SIZE) as usize] {
+pub(crate) fn extract_global_region(
+    image: &GrayImage,
+) -> [f32; (PHASH_SIZE * PHASH_SIZE) as usize] {
     extract_global_region_from_raw(image.as_raw())
 }
 
