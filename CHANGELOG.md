@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **MSRV bumped to 1.88**: Required by `image 0.25.10`, `fast_image_resize 6.0`, and `criterion 0.8.2` which depend on edition 2024 features. Previous MSRV (1.70) was no longer achievable with current dependency versions.
+
+- **Removed `realfft`/`rustfft` dependency**: Replaced with an inline radix-2 Cooley-Tukey FFT for the 32-point DCT-II used in pHash computation. Produces **bit-identical** hash output for all real-world inputs. Removes 11 transitive crates (`rustfft`, `realfft`, `num-complex`, `num-integer`, `num-traits`, `primal-check`, `strength_reduce`, `transpose`, etc.).
+
+- **Removed `kamadak-exif` dependency**: Replaced with an inline JPEG EXIF orientation parser (~80 lines) that reads the APP1 marker and IFD0 Orientation tag directly. Removes 2 transitive crates (`kamadak-exif`, `mutate_once`).
+
+- **Total dependency reduction**: 90 → 77 transitive crates (13 removed).
+
+### Fixed
+
+- **macOS (Apple Silicon) NEON build failure**: Fixed `uint8x16x3_t` field access in the NEON grayscale conversion to use tuple struct syntax (`.0`, `.1`, `.2`) instead of the non-existent `.val[N]` field. The previous code never compiled on `aarch64-apple-darwin`.
+
 ## [0.4.5] - 2026-08-01
 
 ### Added
