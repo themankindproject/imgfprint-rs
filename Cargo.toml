@@ -21,11 +21,8 @@ exclude      = [
 
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
-exif = { package = "kamadak-exif", version = "0.6" }
 fast_image_resize = { version = "6.0", features = ["image"] }
 blake3 = "1.8"
-realfft = "3.4"
-rustfft = "6.2"
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"], optional = true }
 rayon = { version = "1.10", optional = true }

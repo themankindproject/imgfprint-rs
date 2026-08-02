@@ -1,9 +1,8 @@
 //! Image decoding with dimension validation and EXIF orientation support.
 
 use crate::error::ImgFprintError;
-use exif::{In, Reader, Tag};
 use image::{DynamicImage, GenericImageView};
-use std::io::Cursor; // used by read_exif_orientation
+use std::io::Cursor;
 
 /// Default maximum image edge length, in pixels. Beyond this, decode is rejected.
 pub const DEFAULT_MAX_DIMENSION: u32 = 8192;
@@ -44,28 +43,147 @@ impl Default for PreprocessConfig {
     }
 }
 
-/// Reads EXIF orientation from image bytes.
+/// Reads EXIF orientation from JPEG image bytes.
 /// Returns orientation value (1-8) or 1 if no EXIF data found.
+///
+/// Parses the JPEG APP1 (EXIF) marker directly without an external library.
+/// Only looks for the Orientation tag (0x0112) in IFD0.
 fn read_exif_orientation(image_bytes: &[u8]) -> u32 {
-    let mut cursor = Cursor::new(image_bytes);
-    let exif_reader = Reader::new();
+    // JPEG must start with SOI (0xFFD8)
+    if image_bytes.len() < 4 || image_bytes[0] != 0xFF || image_bytes[1] != 0xD8 {
+        return 1;
+    }
 
-    match exif_reader.read_from_container(&mut cursor) {
-        Ok(exif) => {
-            if let Some(orientation_field) = exif.get_field(Tag::Orientation, In::PRIMARY) {
-                if let Some(orientation) = orientation_field.value.get_uint(0) {
-                    if (1..=8).contains(&orientation) {
-                        return orientation;
-                    }
+    // Scan JPEG markers for APP1 (0xFFE1) containing EXIF
+    let mut pos = 2;
+    while pos + 4 <= image_bytes.len() {
+        if image_bytes[pos] != 0xFF {
+            return 1; // Invalid marker
+        }
+        let marker = image_bytes[pos + 1];
+
+        // Skip padding 0xFF bytes
+        if marker == 0xFF {
+            pos += 1;
+            continue;
+        }
+
+        // SOS (Start of Scan) — stop searching
+        if marker == 0xDA {
+            return 1;
+        }
+
+        // Marker segment length (big-endian, includes length bytes themselves)
+        if pos + 4 > image_bytes.len() {
+            return 1;
+        }
+        let seg_len =
+            ((image_bytes[pos + 2] as usize) << 8) | (image_bytes[pos + 3] as usize);
+        if seg_len < 2 {
+            return 1;
+        }
+
+        // APP1 marker with EXIF header?
+        if marker == 0xE1 {
+            let seg_start = pos + 4; // after marker + length
+            let seg_end = pos + 2 + seg_len;
+            if seg_end > image_bytes.len() {
+                return 1;
+            }
+            let seg_data = &image_bytes[seg_start..seg_end];
+
+            // Check for "Exif\0\0" header (6 bytes)
+            if seg_data.len() >= 6 && &seg_data[0..6] == b"Exif\0\0" {
+                if let Some(orient) = parse_tiff_orientation(&seg_data[6..]) {
+                    return orient;
                 }
             }
         }
-        Err(_) => {
-            // No EXIF data or error reading it - default to no transformation
+
+        // Advance past this marker segment
+        pos += 2 + seg_len;
+    }
+
+    1
+}
+
+/// Parses TIFF/IFD0 data to extract the Orientation tag (0x0112).
+fn parse_tiff_orientation(tiff: &[u8]) -> Option<u32> {
+    if tiff.len() < 8 {
+        return None;
+    }
+
+    // Byte order: "II" (little-endian) or "MM" (big-endian)
+    let le = match (tiff[0], tiff[1]) {
+        (b'I', b'I') => true,
+        (b'M', b'M') => false,
+        _ => return None,
+    };
+
+    // Validate TIFF magic number (42)
+    let magic = read_u16(tiff, 2, le);
+    if magic != 42 {
+        return None;
+    }
+
+    // Offset to IFD0
+    let ifd_offset = read_u32(tiff, 4, le) as usize;
+    if ifd_offset + 2 > tiff.len() {
+        return None;
+    }
+
+    // Number of IFD entries
+    let entry_count = read_u16(tiff, ifd_offset, le) as usize;
+    let entries_start = ifd_offset + 2;
+
+    // Each IFD entry is 12 bytes: tag(2) + type(2) + count(4) + value/offset(4)
+    for i in 0..entry_count {
+        let entry_pos = entries_start + i * 12;
+        if entry_pos + 12 > tiff.len() {
+            return None;
+        }
+
+        let tag = read_u16(tiff, entry_pos, le);
+        if tag == 0x0112 {
+            // Orientation tag found
+            // Type should be SHORT (3), count should be 1
+            let value = read_u16(tiff, entry_pos + 8, le) as u32;
+            if (1..=8).contains(&value) {
+                return Some(value);
+            }
+            return None;
         }
     }
 
-    1 // Default: no transformation
+    None
+}
+
+#[inline]
+fn read_u16(data: &[u8], offset: usize, le: bool) -> u16 {
+    if le {
+        u16::from_le_bytes([data[offset], data[offset + 1]])
+    } else {
+        u16::from_be_bytes([data[offset], data[offset + 1]])
+    }
+}
+
+#[inline]
+fn read_u32(data: &[u8], offset: usize, le: bool) -> u32 {
+    if le {
+        u32::from_le_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ])
+    } else {
+        u32::from_be_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ])
+    }
 }
 
 /// Applies EXIF orientation transformation to an image.
