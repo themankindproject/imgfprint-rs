@@ -551,12 +551,12 @@ unsafe fn rgb_to_grayscale_neon(rgb: &[u8], gray: &mut [u8]) {
         let planes = vld3q_u8(rgb.as_ptr().add(rgb_base));
 
         // Widen each 16-byte plane into two 8×u16 halves (low 8 / high 8 pixels).
-        let r_lo = vmovl_u8(vget_low_u8(planes.val[0]));
-        let r_hi = vmovl_u8(vget_high_u8(planes.val[0]));
-        let g_lo = vmovl_u8(vget_low_u8(planes.val[1]));
-        let g_hi = vmovl_u8(vget_high_u8(planes.val[1]));
-        let b_lo = vmovl_u8(vget_low_u8(planes.val[2]));
-        let b_hi = vmovl_u8(vget_high_u8(planes.val[2]));
+        let r_lo = vmovl_u8(vget_low_u8(planes.0));
+        let r_hi = vmovl_u8(vget_high_u8(planes.0));
+        let g_lo = vmovl_u8(vget_low_u8(planes.1));
+        let g_hi = vmovl_u8(vget_high_u8(planes.1));
+        let b_lo = vmovl_u8(vget_low_u8(planes.2));
+        let b_hi = vmovl_u8(vget_high_u8(planes.2));
 
         // u16 multiplies: max value 0x9552 ≤ 0xFFFF (no overflow into 17th bit).
         let rs_lo = vmulq_u16(r_lo, coeff_r);

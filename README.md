@@ -4,7 +4,7 @@
 [![Documentation](https://docs.rs/imgfprint/badge.svg)](https://docs.rs/imgfprint)
 [![License](https://img.shields.io/crates/l/imgfprint)](LICENSE)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/themankindproject/imgfprint-rs/ci.yml)](https://github.com/themankindproject/imgfprint-rs/actions)
-![Rust Version](https://img.shields.io/badge/rust-1.70%2B-blue)
+![Rust Version](https://img.shields.io/badge/rust-1.85%2B-blue)
 
 High-performance image fingerprinting library for Rust with **multi-algorithm perceptual hashing**, **exact matching**, and **semantic embeddings**.
 
