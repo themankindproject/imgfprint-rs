@@ -12,10 +12,17 @@ repository = "https://github.com/themankindproject/imgfprint-rs"
 readme = "README.md"
 exclude      = [
     ".github/**",
+    ".claude/**",
     "benches/**",
     "examples/**",
     "tests/**",
     "fuzz/**",
+    "future.md",
+    "image.md",
+    "logo-preview.html",
+    "CONTRIBUTING.md",
+    "CLAUDE.md",
+    ".mcp.json",
     "*.sh",
 ]
 
