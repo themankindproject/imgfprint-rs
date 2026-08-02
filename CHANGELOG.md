@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-08-02
+
+### Added
+
+- **Documented exact-hash semantics**: Clear rustdoc on `fingerprint()` (hashes raw file bytes) vs `fingerprint_image()` (hashes decoded RGB8 pixels). New USAGE.md section with examples and new integration test demonstrating the divergence. Closes #41.
+
+- **CI cross-platform matrix + MSRV job**: Test job now runs on `ubuntu-latest`, `macos-latest`, and `windows-latest`. Dedicated MSRV job validates compilation and tests on Rust 1.88.0. Closes #42.
+
 ### Changed
 
 - **MSRV bumped to 1.88**: Required by `image 0.25.10`, `fast_image_resize 6.0`, and `criterion 0.8.2` which depend on edition 2024 features. Previous MSRV (1.70) was no longer achievable with current dependency versions.
@@ -20,16 +28,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **macOS (Apple Silicon) NEON build failure**: Fixed `uint8x16x3_t` field access in the NEON grayscale conversion to use tuple struct syntax (`.0`, `.1`, `.2`) instead of the non-existent `.val[N]` field. The previous code never compiled on `aarch64-apple-darwin`.
-
-## [0.4.5] - 2026-08-01
-
-### Added
-
-- **Documented exact-hash semantics**: Clear rustdoc on `fingerprint()` (hashes raw file bytes) vs `fingerprint_image()` (hashes decoded RGB8 pixels). New USAGE.md section with examples and new integration test demonstrating the divergence. Closes #41.
-
-- **CI cross-platform matrix + MSRV job**: Test job now runs on `ubuntu-latest`, `macos-latest`, and `windows-latest`. Dedicated MSRV job validates compilation and tests on Rust 1.70.0. Closes #42.
-
-### Changed
 
 - **Propagate DCT failures instead of `unwrap_or(0)`**: `compute_phash_data` now returns `Result` and propagates PHash computation errors to callers instead of silently producing all-zero hashes. Existing public APIs already return `Result`, so this is not a breaking change — callers now get a meaningful `ImgFprintError::ProcessingError` on DCT failure instead of a spurious zero hash. Closes #40.
 
