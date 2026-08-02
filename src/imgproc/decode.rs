@@ -77,8 +77,7 @@ fn read_exif_orientation(image_bytes: &[u8]) -> u32 {
         if pos + 4 > image_bytes.len() {
             return 1;
         }
-        let seg_len =
-            ((image_bytes[pos + 2] as usize) << 8) | (image_bytes[pos + 3] as usize);
+        let seg_len = ((image_bytes[pos + 2] as usize) << 8) | (image_bytes[pos + 3] as usize);
         if seg_len < 2 {
             return 1;
         }

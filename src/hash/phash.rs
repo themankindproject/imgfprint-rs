@@ -31,8 +31,8 @@ fn fft32_in_place(re: &mut [f32; DCT_SIZE], im: &mut [f32; DCT_SIZE]) {
 
     // Bit-reversal permutation for N=32 (5 bits)
     const BIT_REV: [usize; 32] = [
-        0, 16, 8, 24, 4, 20, 12, 28, 2, 18, 10, 26, 6, 22, 14, 30, 1, 17, 9, 25, 5, 21, 13,
-        29, 3, 19, 11, 27, 7, 23, 15, 31,
+        0, 16, 8, 24, 4, 20, 12, 28, 2, 18, 10, 26, 6, 22, 14, 30, 1, 17, 9, 25, 5, 21, 13, 29, 3,
+        19, 11, 27, 7, 23, 15, 31,
     ];
 
     // Apply bit-reversal permutation
@@ -405,7 +405,10 @@ mod tests {
             let y = i / 64;
             ((x.wrapping_mul(y)) % 256) as f32 / 255.0
         });
-        assert_eq!(compute_phash_from_64x64(&block).unwrap(), 0x80021f3f3f3e7c38);
+        assert_eq!(
+            compute_phash_from_64x64(&block).unwrap(),
+            0x80021f3f3f3e7c38
+        );
     }
 
     #[test]
