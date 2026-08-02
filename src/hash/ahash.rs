@@ -15,7 +15,7 @@ const TOTAL_PIXELS: usize = AHASH_SIZE * AHASH_SIZE;
 ///
 /// # Arguments
 /// * `pixels` - 32x32 grayscale buffer with values in [0.0, 1.0]
-pub fn compute_ahash(pixels: &[f32; 32 * 32]) -> u64 {
+pub(crate) fn compute_ahash(pixels: &[f32; 32 * 32]) -> u64 {
     let mut small = [0.0f32; TOTAL_PIXELS];
 
     bilinear_resample(pixels, 32, 32, &mut small, AHASH_SIZE, AHASH_SIZE);
@@ -25,7 +25,7 @@ pub fn compute_ahash(pixels: &[f32; 32 * 32]) -> u64 {
 
 /// Computes AHash from a 64x64 block by downsampling directly to 8x8.
 #[inline]
-pub fn compute_ahash_from_64x64(block: &[f32; 64 * 64]) -> u64 {
+pub(crate) fn compute_ahash_from_64x64(block: &[f32; 64 * 64]) -> u64 {
     let mut small = [0.0f32; TOTAL_PIXELS];
     bilinear_resample(block, 64, 64, &mut small, AHASH_SIZE, AHASH_SIZE);
     compute_hash_from_mean(&small)

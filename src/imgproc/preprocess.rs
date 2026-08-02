@@ -82,7 +82,7 @@ const _: () = assert!(
 ///
 /// Panics if `src` or `dst` are shorter than required, or if any dimension is zero.
 #[inline(always)]
-pub fn bilinear_resample(
+pub(crate) fn bilinear_resample(
     src: &[f32],
     src_w: usize,
     src_h: usize,
@@ -592,7 +592,7 @@ unsafe fn rgb_to_grayscale_neon(rgb: &[u8], gray: &mut [u8]) {
 /// Extracts center 32x32 region as normalized float buffer.
 #[inline]
 #[cfg(test)]
-pub fn extract_global_region(image: &GrayImage) -> [f32; (PHASH_SIZE * PHASH_SIZE) as usize] {
+pub(crate) fn extract_global_region(image: &GrayImage) -> [f32; (PHASH_SIZE * PHASH_SIZE) as usize] {
     extract_global_region_from_raw(image.as_raw())
 }
 
@@ -679,7 +679,7 @@ pub(crate) fn extract_global_region_from_raw(
 /// and distributing pixels to their respective blocks.
 #[inline]
 #[cfg(test)]
-pub fn extract_blocks(image: &GrayImage) -> [[f32; (BLOCK_SIZE * BLOCK_SIZE) as usize]; 16] {
+pub(crate) fn extract_blocks(image: &GrayImage) -> [[f32; (BLOCK_SIZE * BLOCK_SIZE) as usize]; 16] {
     extract_blocks_from_raw(image.as_raw())
 }
 
