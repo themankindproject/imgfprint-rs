@@ -12,14 +12,18 @@ High-performance image fingerprinting library for Rust with **multi-algorithm pe
 
 `imgfprint` provides multiple complementary approaches to image identification and similarity detection:
 
-| Method | Use Case | Speed | Precision |
-|--------|----------|-------|-----------|
-| **BLAKE3** | Exact deduplication | ~0.2ms | 100% exact |
-| **AHash** | Fast similarity | ~0.3ms | Average-based, simplest |
-| **PHash** | Perceptual similarity | ~1.5ms | DCT-based, resilient to compression |
-| **DHash** | Structural similarity | ~0.5ms | Gradient-based, good for crops |
-| **Multi** | Combined accuracy | ~1.8ms | Weighted AHash+PHash+DHash (10/60/30) |
-| **Semantic** | Content understanding | Local or API | Captures visual meaning |
+| Method | Use Case | Precision |
+|--------|----------|-----------|
+| **BLAKE3** | Exact deduplication | 100% exact |
+| **AHash** | Fast similarity | Average-based, simplest |
+| **PHash** | Perceptual similarity | DCT-based, resilient to compression |
+| **DHash** | Structural similarity | Gradient-based, good for crops |
+| **Multi** | Combined accuracy | Weighted AHash+PHash+DHash (10/60/30) |
+| **Semantic** | Content understanding | Captures visual meaning |
+
+Per-method hash cost is small compared to image decode + resize, which are
+shared across all methods — see [Performance](#performance) for measured
+end-to-end numbers.
 
 Perfect for:
 - Duplicate image detection
@@ -221,18 +225,31 @@ let fp = ImageFingerprinter::fingerprint_path_with_preprocess("untrusted.jpg", &
 ## Performance
 
 Benchmarked on Intel i5 11th gen (16 GB RAM, 4 cores 8 threads), release
-build, structured test images. Times scale with input resolution — the
-resize stage dominates for large inputs:
+build, photo-like PNG test images. Two paths are measured separately because
+image decode is a large, content-dependent share of the from-bytes cost:
+
+| Operation | From bytes | Pre-decoded (`fingerprint_image`) |
+|-----------|-----------|-----------------------------------|
+| @256×256 | **0.45ms** | **0.27ms** |
+| @512×512 | **1.87ms** | **1.84ms** |
+| @1024×1024 | **4.78ms** | **3.65ms** |
+| @2048×2048 | **15.6ms** | **11.5ms** |
 
 | Operation | Time | Throughput |
 |-----------|------|------------|
-| `fingerprint()` @256×256 | **0.34ms** | ~2,900 images/sec |
-| `fingerprint()` @512×512 | **1.76ms** | ~570 images/sec |
-| `fingerprint()` @1024×1024 | **4.84ms** | ~207 images/sec |
-| `fingerprint()` @2048×2048 | **15.8ms** | ~63 images/sec |
 | `compare()` | **~335ns** | ~3M comparisons/sec |
 | `batch()` (16 × 256×256) | **2.13ms** | ~7,500 images/sec (parallel) |
 | `semantic_similarity()` | ~500ns | 2M comparisons/sec |
+
+Notes:
+- **Decode dominates for large inputs.** At 2048×2048 the PNG decode is
+  ~4ms of the 15.6ms from-bytes total; the hash + resize stage is the rest.
+  If you already hold a `DynamicImage` (video frames, in-memory composition),
+  use `fingerprint_image` to skip the decode.
+- **BLAKE3 exact hash** over the same bytes costs ~0.05ms @256 to ~3.7ms
+  @2048 — it runs inside `fingerprint()` and is not a separate pass.
+- Times vary with image content: PNG decode cost scales with pixel entropy,
+  so flat/low-detail images decode faster than the photo-like figures above.
 
 Single-algorithm mode (`fingerprint_with`) matches the corresponding layer
 of multi-hash mode bit-for-bit. For maximum throughput on AHash/DHash-only
