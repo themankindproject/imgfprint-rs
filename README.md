@@ -220,14 +220,24 @@ let fp = ImageFingerprinter::fingerprint_path_with_preprocess("untrusted.jpg", &
 
 ## Performance
 
-Benchmarked on Intel i5 11th gen (16 GB RAM , 4 cores 8 threads):
+Benchmarked on Intel i5 11th gen (16 GB RAM, 4 cores 8 threads), release
+build, structured test images. Times scale with input resolution — the
+resize stage dominates for large inputs:
 
 | Operation | Time | Throughput |
 |-----------|------|------------|
-| `fingerprint()` | **1.35ms** | ~740 images/sec |
-| `compare()` | **385ns** | 2.6B comparisons/sec |
-| `batch()` (10 images) | **6.16ms** | 1,620 images/sec (parallel) |
+| `fingerprint()` @256×256 | **0.34ms** | ~2,900 images/sec |
+| `fingerprint()` @512×512 | **1.76ms** | ~570 images/sec |
+| `fingerprint()` @1024×1024 | **4.84ms** | ~207 images/sec |
+| `fingerprint()` @2048×2048 | **15.8ms** | ~63 images/sec |
+| `compare()` | **~335ns** | ~3M comparisons/sec |
+| `batch()` (16 × 256×256) | **2.13ms** | ~7,500 images/sec (parallel) |
 | `semantic_similarity()` | ~500ns | 2M comparisons/sec |
+
+Single-algorithm mode (`fingerprint_with`) matches the corresponding layer
+of multi-hash mode bit-for-bit. For maximum throughput on AHash/DHash-only
+workloads, `fingerprint_with_fast` trades the Lanczos3 resize for bilinear
+(~2x faster resize) — see its docs for the cross-mode consistency caveat.
 
 Run benchmarks:
 ```bash

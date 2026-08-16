@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`MultiHashConfig::validate()` / `MultiHashConfig::sanitized()`**: Strict validation rejects NaN/negative weights and out-of-range block thresholds (new `ImgFprintError::InvalidConfig` variant); `sanitized()` repairs such configs for best-effort scoring. `compare_with_config` now sanitizes its input, so a malformed config can never produce a NaN similarity score.
+
+- **`fingerprint_image_with_preprocess`**: `fingerprint_image` variant accepting a tunable `PreprocessConfig` (context + static API).
+
+- **`fingerprint_with_fast`**: Opt-in single-algorithm fingerprinting with bilinear resize (~2x faster resize for AHash/DHash). Documented as NOT bit-identical to the standard methods — use only when the whole index is built with it.
+
+- **Regression test suite** (`tests/audit_regressions.rs`): pins single-vs-multi hash consistency, dimension guards, config validation, batch ordering, and coarse-key clamping.
+
+### Changed
+
+- **Single-algorithm mode now matches multi-hash mode bit-for-bit**: `fingerprint_with(bytes, alg)` previously resized with bilinear for AHash/DHash while `fingerprint(bytes)` used Lanczos3, so the same image produced different hashes depending on the entry point (measured: up to 9 bits global, 63/64 bits per block). All standard paths now use Lanczos3; the bilinear fast path survives as the explicit `fingerprint_with_fast`.
+
+- **`fingerprint_image` enforces dimension guards**: pre-decoded images were skipping the min/max dimension validation applied to the byte paths (a 1x1 image returned `Ok`). Both entry points now share the same `PreprocessConfig` guards.
+
+- **`fingerprint_batch_chunked` parallelized**: with the `parallel` feature, each chunk is fingerprinted across rayon workers (per-worker contexts) while the callback still fires in input order. Previously sequential even with `parallel` enabled.
+
+- **PHash block hashes computed in parallel** under the `parallel` feature (16 independent block DCTs across rayon workers). Output is bit-identical.
+
+- **`watermark` feature**: removed the four dead dependencies (`rand_chacha`, `rand_core`, `hmac`, `sha2`) — the feature had no implementation. The feature name is kept (now empty) so existing `--features watermark` builds keep compiling.
+
+### Fixed
+
+- **PHash DCT twiddle factors precomputed**: the 31 cos/sin pairs of the DCT-II post-FFT rotation were recomputed inside every 32-point DCT call (~42,000 libm calls per multi-hash fingerprint). Now computed once per process; hash output is bit-identical.
+
+- **`coarse_key`**: removed the unreachable `debug_assert!` (the clamp made >64 inputs safe anyway); values > 64 now clamp to 64 in all build modes as documented, and the behavior is covered by a test.
+
+- Removed a redundant per-call `hash_matrix` memset and row-buffer copy in the PHash scratch path.
+
 ## [0.4.5] - 2026-08-02
 
 ### Added

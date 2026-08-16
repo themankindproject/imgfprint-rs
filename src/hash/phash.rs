@@ -23,6 +23,28 @@ fn get_fft_twiddles() -> &'static [(f32, f32); DCT_SIZE] {
     })
 }
 
+/// Twiddle factors for the DCT-II post-FFT rotation:
+/// exp(-πi·k/(2N)) = (cos(πk/64), sin(-πk/64)) for k in 0..32.
+///
+/// Precomputed once per process. The previous implementation recomputed these
+/// 31 cos/sin pairs inside every `dct2_32_with_scratch` call — 680 DCTs per
+/// multi-hash fingerprint meant ~42,000 libm calls per image. Values are
+/// produced by the exact same formula as before, so hash output is
+/// bit-identical.
+static DCT_TWIDDLES: OnceLock<Box<[(f32, f32); DCT_SIZE]>> = OnceLock::new();
+
+#[inline]
+fn get_dct_twiddles() -> &'static [(f32, f32); DCT_SIZE] {
+    DCT_TWIDDLES.get_or_init(|| {
+        let mut tw = Box::new([(0.0f32, 0.0f32); DCT_SIZE]);
+        for k in 0..DCT_SIZE {
+            let angle = -PI * k as f32 / (2.0 * DCT_SIZE as f32);
+            tw[k] = (angle.cos(), angle.sin());
+        }
+        tw
+    })
+}
+
 /// In-place radix-2 DIT FFT for N=32 complex values.
 /// Input is in bit-reversed order, output in natural order.
 #[inline]
@@ -111,7 +133,6 @@ impl Dct2Scratch {
 #[derive(Debug, Clone)]
 pub(crate) struct DctScratch {
     dct2: Dct2Scratch,
-    row_buffer: [f32; DCT_SIZE],
     col_buffer: [f32; DCT_SIZE * DCT_SIZE],
     hash_matrix: [f32; TOTAL_HASH_ELEMENTS],
     col_input: [f32; DCT_SIZE],
@@ -122,18 +143,11 @@ impl DctScratch {
     pub(crate) fn new() -> Self {
         Self {
             dct2: Dct2Scratch::new(),
-            row_buffer: [0.0; DCT_SIZE],
             col_buffer: [0.0; DCT_SIZE * DCT_SIZE],
             hash_matrix: [0.0; TOTAL_HASH_ELEMENTS],
             col_input: [0.0; DCT_SIZE],
             col_output: [0.0; DCT_SIZE],
         }
-    }
-
-    /// Prepares scratch for reuse.
-    #[inline(always)]
-    fn reset(&mut self) {
-        self.hash_matrix = [0.0; TOTAL_HASH_ELEMENTS];
     }
 }
 
@@ -169,13 +183,13 @@ fn dct2_32_with_scratch(
     let mut fft_im = [0.0f32; 17];
     real_fft_32(&scratch.buffer, &mut fft_re, &mut fft_im);
 
-    // Step 3: Apply twiddle factors (identical logic to old code)
+    // Step 3: Apply twiddle factors (identical logic to old code; the
+    // cos/sin pairs are precomputed once per process in DCT_TWIDDLES).
     const SCALE: f32 = 2.0 / DCT_SIZE as f32;
+    let tw = get_dct_twiddles();
     output[0] = fft_re[0] * SCALE;
     for k in 1..DCT_SIZE {
-        let angle = -PI * k as f32 / (2.0 * DCT_SIZE as f32);
-        let twiddle_re = angle.cos();
-        let twiddle_im = angle.sin();
+        let (twiddle_re, twiddle_im) = tw[k];
         let re = fft_re[k.min(DCT_SIZE - k)];
         let im = if k < 17 {
             fft_im[k]
@@ -221,24 +235,21 @@ pub(crate) fn compute_phash(
 /// Context-aware variant of [`compute_phash`](Self::compute_phash) that reuses a
 /// caller-supplied scratch buffer instead of allocating stack frames repeatedly.
 ///
-/// Behavior and output are bit-identical to `compute_phash`. The scratch is
-/// reset at the start of each call so the function is safe to invoke multiple
-/// times against the same buffer.
+/// Behavior and output are bit-identical to `compute_phash`. Every buffer in
+/// the scratch is fully overwritten on each call, so no reset is needed and
+/// the function is safe to invoke multiple times against the same buffer.
 #[inline]
 pub(crate) fn compute_phash_with_scratch(
     pixels: &[f32; DCT_SIZE * DCT_SIZE],
     scratch: &mut DctScratch,
 ) -> Result<u64, crate::error::ImgFprintError> {
-    scratch.reset();
-
-    // Row-wise DCT
+    // Row-wise DCT. `dct2_32_with_scratch` reads its input through
+    // `scratch.dct2.buffer`, so the row slice can be passed directly —
+    // no intermediate copy into `row_buffer` is needed.
     for row in 0..DCT_SIZE {
         let start = row * DCT_SIZE;
-        scratch
-            .row_buffer
-            .copy_from_slice(&pixels[start..start + DCT_SIZE]);
         dct2_32_with_scratch(
-            &scratch.row_buffer,
+            &pixels[start..start + DCT_SIZE],
             &mut scratch.col_buffer[start..start + DCT_SIZE],
             &mut scratch.dct2,
         )?;

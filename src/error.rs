@@ -104,6 +104,16 @@ pub enum ImgFprintError {
     /// - The underlying read fails partway through
     #[error("io error: {0}")]
     IoError(String),
+
+    /// A caller-supplied configuration is invalid.
+    ///
+    /// ## Errors
+    /// This error occurs when:
+    /// - A [`MultiHashConfig`](crate::MultiHashConfig) contains NaN or
+    ///   negative weights (see `MultiHashConfig::validate`)
+    /// - A block distance threshold is outside the valid 0–64 range
+    #[error("invalid config: {0}")]
+    InvalidConfig(String),
 }
 
 impl From<std::io::Error> for ImgFprintError {
@@ -139,6 +149,13 @@ impl ImgFprintError {
     #[inline(never)]
     pub fn image_too_small(msg: impl Into<String>) -> Self {
         Self::ImageTooSmall(msg.into())
+    }
+
+    /// Creates an invalid config error with the given message.
+    #[cold]
+    #[inline(never)]
+    pub fn invalid_config(msg: impl Into<String>) -> Self {
+        Self::InvalidConfig(msg.into())
     }
 }
 

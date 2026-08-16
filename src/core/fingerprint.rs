@@ -78,6 +78,84 @@ impl Default for MultiHashConfig {
     }
 }
 
+impl MultiHashConfig {
+    /// Validates the configuration, rejecting values that would produce
+    /// meaningless or NaN similarity scores.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ImgFprintError::InvalidConfig`] when:
+    /// - any weight (`ahash_weight`, `phash_weight`, `dhash_weight`,
+    ///   `global_weight`, `block_weight`) is NaN or negative — NaN weights
+    ///   poison the score (NaN propagates through the weighted sum and makes
+    ///   `is_similar` silently return `false`), and negative weights invert
+    ///   similarity semantics;
+    /// - `block_distance_threshold` exceeds 64 (the maximum Hamming distance
+    ///   between two 64-bit hashes).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use imgfprint::MultiHashConfig;
+    ///
+    /// let cfg = MultiHashConfig::default();
+    /// assert!(cfg.validate().is_ok());
+    ///
+    /// let bad = MultiHashConfig { phash_weight: f32::NAN, ..cfg };
+    /// assert!(bad.validate().is_err());
+    /// ```
+    pub fn validate(&self) -> Result<(), crate::error::ImgFprintError> {
+        let weights = [
+            ("ahash_weight", self.ahash_weight),
+            ("phash_weight", self.phash_weight),
+            ("dhash_weight", self.dhash_weight),
+            ("global_weight", self.global_weight),
+            ("block_weight", self.block_weight),
+        ];
+        for (name, value) in weights {
+            if value.is_nan() {
+                return Err(crate::error::ImgFprintError::invalid_config(format!(
+                    "{name} is NaN"
+                )));
+            }
+            if value < 0.0 {
+                return Err(crate::error::ImgFprintError::invalid_config(format!(
+                    "{name} is negative ({value})"
+                )));
+            }
+        }
+        if self.block_distance_threshold > 64 {
+            return Err(crate::error::ImgFprintError::invalid_config(format!(
+                "block_distance_threshold ({}) exceeds maximum 64",
+                self.block_distance_threshold
+            )));
+        }
+        Ok(())
+    }
+
+    /// Returns a sanitized copy of this config that is safe to score with.
+    ///
+    /// - NaN weights become `0.0` (the algorithm is excluded from the score).
+    /// - Negative weights are clamped to `0.0`.
+    /// - `block_distance_threshold` is clamped to `0..=64`.
+    ///
+    /// Use this when configs come from untrusted sources (e.g. deserialized
+    /// user input) and you prefer best-effort scoring over rejection.
+    /// [`validate`](Self::validate) is the strict alternative.
+    #[must_use]
+    pub fn sanitized(&self) -> Self {
+        let sanitize = |v: f32| if v.is_nan() || v < 0.0 { 0.0 } else { v };
+        Self {
+            ahash_weight: sanitize(self.ahash_weight),
+            phash_weight: sanitize(self.phash_weight),
+            dhash_weight: sanitize(self.dhash_weight),
+            global_weight: sanitize(self.global_weight),
+            block_weight: sanitize(self.block_weight),
+            block_distance_threshold: self.block_distance_threshold.min(64),
+        }
+    }
+}
+
 /// A perceptual fingerprint containing multiple hash layers for robust comparison.
 ///
 /// Fingerprints are deterministic and comparable across platforms. The structure
@@ -191,7 +269,7 @@ impl ImageFingerprint {
     ///
     /// - `coarse_key(0)` returns `0` (single bucket — everything matches).
     /// - `coarse_key(64)` returns the full `global_hash` (finest granularity).
-    /// - Values > 64 are clamped to 64 in release; panic in debug.
+    /// - Values > 64 are clamped to 64 (full hash) in all build modes.
     ///
     /// # Example
     ///
@@ -210,11 +288,6 @@ impl ImageFingerprint {
     #[inline]
     #[must_use]
     pub fn coarse_key(&self, bucket_bits: u32) -> u64 {
-        debug_assert!(
-            bucket_bits <= 64,
-            "coarse_key: bucket_bits ({}) must be <= 64",
-            bucket_bits
-        );
         let bits = bucket_bits.min(64);
         if bits == 0 {
             0
@@ -439,6 +512,12 @@ impl MultiHashFingerprint {
     ///
     /// All knobs from [`MultiHashConfig`] are honored; defaults reproduce
     /// [`compare`](Self::compare). See [`MultiHashConfig`] for examples.
+    ///
+    /// The config is sanitized before scoring: NaN/negative weights are
+    /// treated as `0.0` and `block_distance_threshold` is clamped to `0..=64`,
+    /// so a malformed config can never produce a NaN score. Use
+    /// [`MultiHashConfig::validate`] if you need to reject bad configs
+    /// instead.
     #[must_use]
     pub fn compare_with_config(
         &self,
@@ -457,6 +536,9 @@ impl MultiHashFingerprint {
                 perceptual_distance: 0,
             };
         }
+
+        // Sanitize once up front; identity for valid configs.
+        let config = config.sanitized();
 
         let ahash_sim = compute_score_only(
             &self.ahash,
@@ -804,11 +886,11 @@ mod tests {
 
     #[test]
     fn coarse_key_clamped_above_64() {
-        // In release mode, values > 64 clamp to 64 (full hash).
-        // In debug mode, this would trigger debug_assert. So we test that
-        // coarse_key(64) == global_hash, which is the clamped behavior.
+        // Values > 64 clamp to 64 (full hash) in all build modes.
         let hash = 0xDEAD_BEEF_CAFE_BABE;
         let f = fp(hash, 0);
         assert_eq!(f.coarse_key(64), hash);
+        assert_eq!(f.coarse_key(65), hash);
+        assert_eq!(f.coarse_key(u32::MAX), hash);
     }
 }

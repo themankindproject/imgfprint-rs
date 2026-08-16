@@ -211,6 +211,43 @@ pub fn decode_image(image_bytes: &[u8]) -> Result<DynamicImage, ImgFprintError> 
     decode_image_with_config(image_bytes, &PreprocessConfig::default())
 }
 
+/// Validates decoded image dimensions against a [`PreprocessConfig`].
+///
+/// Shared by the byte-decode path and the already-decoded
+/// [`FingerprinterContext::fingerprint_image`](crate::FingerprinterContext::fingerprint_image)
+/// path so both entry points enforce identical min/max dimension guards.
+///
+/// # Errors
+///
+/// - [`ImgFprintError::InvalidImage`] if either edge exceeds `max_dimension`
+///   or the config itself is inconsistent (`min_dimension > max_dimension`).
+/// - [`ImgFprintError::ImageTooSmall`] if either edge is below `min_dimension`.
+pub(crate) fn validate_dimensions(
+    width: u32,
+    height: u32,
+    config: &PreprocessConfig,
+) -> Result<(), ImgFprintError> {
+    if config.min_dimension > config.max_dimension {
+        return Err(ImgFprintError::invalid_image(format!(
+            "invalid config: min_dimension ({}) > max_dimension ({})",
+            config.min_dimension, config.max_dimension
+        )));
+    }
+    if width > config.max_dimension || height > config.max_dimension {
+        return Err(ImgFprintError::invalid_image(format!(
+            "dimensions {}x{} exceed limit {}x{}",
+            width, height, config.max_dimension, config.max_dimension
+        )));
+    }
+    if width < config.min_dimension || height < config.min_dimension {
+        return Err(ImgFprintError::image_too_small(format!(
+            "dimensions {}x{} are below minimum {}x{}",
+            width, height, config.min_dimension, config.min_dimension
+        )));
+    }
+    Ok(())
+}
+
 /// Decodes image bytes with a tunable [`PreprocessConfig`].
 pub fn decode_image_with_config(
     image_bytes: &[u8],
