@@ -29,3 +29,5 @@ fuzz/artifacts
 # Local Claude/MCP config
 .mcp.json
 CLAUDE.md
+AGENTS.md
+.codex/
