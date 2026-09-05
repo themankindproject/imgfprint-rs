@@ -211,6 +211,20 @@ pub fn decode_image(image_bytes: &[u8]) -> Result<DynamicImage, ImgFprintError> 
     decode_image_with_config(image_bytes, &PreprocessConfig::default())
 }
 
+/// Rejects an inconsistent config where `min_dimension > max_dimension`.
+///
+/// Shared by [`validate_dimensions`] and the byte-decode path so the sanity
+/// check lives in exactly one place.
+fn check_config_sanity(config: &PreprocessConfig) -> Result<(), ImgFprintError> {
+    if config.min_dimension > config.max_dimension {
+        return Err(ImgFprintError::invalid_image(format!(
+            "invalid config: min_dimension ({}) > max_dimension ({})",
+            config.min_dimension, config.max_dimension
+        )));
+    }
+    Ok(())
+}
+
 /// Validates decoded image dimensions against a [`PreprocessConfig`].
 ///
 /// Shared by the byte-decode path and the already-decoded
@@ -227,12 +241,7 @@ pub(crate) fn validate_dimensions(
     height: u32,
     config: &PreprocessConfig,
 ) -> Result<(), ImgFprintError> {
-    if config.min_dimension > config.max_dimension {
-        return Err(ImgFprintError::invalid_image(format!(
-            "invalid config: min_dimension ({}) > max_dimension ({})",
-            config.min_dimension, config.max_dimension
-        )));
-    }
+    check_config_sanity(config)?;
     if width > config.max_dimension || height > config.max_dimension {
         return Err(ImgFprintError::invalid_image(format!(
             "dimensions {}x{} exceed limit {}x{}",
@@ -257,12 +266,7 @@ pub fn decode_image_with_config(
         return Err(ImgFprintError::invalid_image("empty input"));
     }
 
-    if config.min_dimension > config.max_dimension {
-        return Err(ImgFprintError::invalid_image(format!(
-            "invalid config: min_dimension ({}) > max_dimension ({})",
-            config.min_dimension, config.max_dimension
-        )));
-    }
+    check_config_sanity(config)?;
 
     if image_bytes.len() > config.max_input_bytes {
         return Err(ImgFprintError::invalid_image(format!(
@@ -275,18 +279,7 @@ pub fn decode_image_with_config(
     // Early dimension check without full decode to reject oversized images cheaply
     if let Ok(reader) = image::ImageReader::new(Cursor::new(image_bytes)).with_guessed_format() {
         if let Ok((w, h)) = reader.into_dimensions() {
-            if w > config.max_dimension || h > config.max_dimension {
-                return Err(ImgFprintError::invalid_image(format!(
-                    "dimensions {}x{} exceed limit {}x{}",
-                    w, h, config.max_dimension, config.max_dimension
-                )));
-            }
-            if w < config.min_dimension || h < config.min_dimension {
-                return Err(ImgFprintError::image_too_small(format!(
-                    "dimensions {}x{} are below minimum {}x{}",
-                    w, h, config.min_dimension, config.min_dimension
-                )));
-            }
+            validate_dimensions(w, h, config)?;
         }
     }
 
@@ -327,35 +320,25 @@ pub fn decode_image_with_config(
     })?;
 
     let (width, height) = image.dimensions();
-    if width > config.max_dimension || height > config.max_dimension {
-        return Err(ImgFprintError::invalid_image(format!(
-            "dimensions {}x{} exceed limit {}x{}",
-            width, height, config.max_dimension, config.max_dimension
-        )));
-    }
-    if width < config.min_dimension || height < config.min_dimension {
-        return Err(ImgFprintError::image_too_small(format!(
-            "dimensions {}x{} are below minimum {}x{}",
-            width, height, config.min_dimension, config.min_dimension
-        )));
-    }
+    validate_dimensions(width, height, config)?;
 
     let orientation = read_exif_orientation(image_bytes);
     let oriented_image = apply_orientation_transform(image, orientation);
 
     let (final_w, final_h) = oriented_image.dimensions();
-    if final_w > config.max_dimension || final_h > config.max_dimension {
-        return Err(ImgFprintError::invalid_image(format!(
+    validate_dimensions(final_w, final_h, config).map_err(|e| match e {
+        // Rebuild the post-orientation messages verbatim so callers see the
+        // rotated size; the inner message already names the pre-rotation dims.
+        ImgFprintError::InvalidImage(_) => ImgFprintError::invalid_image(format!(
             "post-orientation dimensions {}x{} exceed limit {}x{}",
             final_w, final_h, config.max_dimension, config.max_dimension
-        )));
-    }
-    if final_w < config.min_dimension || final_h < config.min_dimension {
-        return Err(ImgFprintError::image_too_small(format!(
+        )),
+        ImgFprintError::ImageTooSmall(_) => ImgFprintError::image_too_small(format!(
             "post-orientation dimensions {}x{} are below minimum {}x{}",
             final_w, final_h, config.min_dimension, config.min_dimension
-        )));
-    }
+        )),
+        other => other,
+    })?;
 
     Ok(oriented_image)
 }

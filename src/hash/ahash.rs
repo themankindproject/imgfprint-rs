@@ -103,27 +103,12 @@ mod tests {
     }
 
     #[test]
-    fn test_ahash_uniform_image() {
-        let img: [f32; 32 * 32] = [0.5; 32 * 32];
-
-        let hash = compute_ahash(&img);
-        assert_eq!(hash, u64::MAX);
-    }
-
-    #[test]
-    fn test_ahash_all_dark() {
-        let img: [f32; 32 * 32] = [0.0; 32 * 32];
-
-        let hash = compute_ahash(&img);
-        assert_eq!(hash, u64::MAX);
-    }
-
-    #[test]
-    fn test_ahash_all_bright() {
-        let img: [f32; 32 * 32] = [1.0; 32 * 32];
-
-        let hash = compute_ahash(&img);
-        assert_eq!(hash, u64::MAX);
+    fn test_ahash_degenerate_inputs_all_max() {
+        // Uniform, all-dark, and all-bright inputs all equal the mean, and
+        // `>= mean` sets every bit.
+        for img in [[0.5; 32 * 32], [0.0; 32 * 32], [1.0; 32 * 32]] {
+            assert_eq!(compute_ahash(&img), u64::MAX);
+        }
     }
 
     #[test]
@@ -178,24 +163,15 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_hash_from_mean_uniform() {
-        let pixels = [0.5f32; TOTAL_PIXELS];
-        let hash = compute_hash_from_mean(&pixels);
-        assert_eq!(hash, u64::MAX);
-    }
-
-    #[test]
-    fn test_compute_hash_from_mean_all_zeros() {
-        let pixels = [0.0f32; TOTAL_PIXELS];
-        let hash = compute_hash_from_mean(&pixels);
-        assert_eq!(hash, u64::MAX);
-    }
-
-    #[test]
-    fn test_compute_hash_from_mean_all_ones() {
-        let pixels = [1.0f32; TOTAL_PIXELS];
-        let hash = compute_hash_from_mean(&pixels);
-        assert_eq!(hash, u64::MAX);
+    fn test_compute_hash_from_mean_degenerate() {
+        // Uniform / all-zero / all-one inputs all equal the mean -> all bits set.
+        for pixels in [
+            [0.5f32; TOTAL_PIXELS],
+            [0.0f32; TOTAL_PIXELS],
+            [1.0f32; TOTAL_PIXELS],
+        ] {
+            assert_eq!(compute_hash_from_mean(&pixels), u64::MAX);
+        }
     }
 
     #[test]

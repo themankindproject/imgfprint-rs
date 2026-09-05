@@ -654,24 +654,8 @@ pub(crate) fn extract_blocks_into_buffer(pixels: &[u8], buffer: &mut [[f32; 64 *
 pub(crate) fn extract_global_region_from_raw(
     pixels: &[u8],
 ) -> [f32; (PHASH_SIZE * PHASH_SIZE) as usize] {
-    debug_assert_eq!(pixels.len(), (NORMALIZED_SIZE * NORMALIZED_SIZE) as usize);
-
-    let start_x = (NORMALIZED_SIZE - PHASH_SIZE) / 2;
-    let start_y = (NORMALIZED_SIZE - PHASH_SIZE) / 2;
     let mut buffer = [0.0f32; (PHASH_SIZE * PHASH_SIZE) as usize];
-    const SCALE: f32 = 1.0 / 255.0;
-
-    // Optimized: process row by row with better cache locality
-    for y in 0..PHASH_SIZE as usize {
-        let src_row_start = (start_y as usize + y) * NORMALIZED_SIZE as usize + start_x as usize;
-        let dst_row_start = y * PHASH_SIZE as usize;
-
-        // Unroll inner loop for better performance
-        for x in 0..PHASH_SIZE as usize {
-            buffer[dst_row_start + x] = pixels[src_row_start + x] as f32 * SCALE;
-        }
-    }
-
+    extract_global_region_into_buffer(pixels, &mut buffer);
     buffer
 }
 
@@ -691,33 +675,8 @@ pub(crate) fn extract_blocks(image: &GrayImage) -> [[f32; (BLOCK_SIZE * BLOCK_SI
 pub(crate) fn extract_blocks_from_raw(
     pixels: &[u8],
 ) -> [[f32; (BLOCK_SIZE * BLOCK_SIZE) as usize]; 16] {
-    debug_assert_eq!(pixels.len(), (NORMALIZED_SIZE * NORMALIZED_SIZE) as usize);
-
     let mut blocks = [[0.0f32; (BLOCK_SIZE * BLOCK_SIZE) as usize]; 16];
-    const SCALE: f32 = 1.0 / 255.0;
-
-    // Optimized: single pass through the image with better cache locality
-    // Process each block row
-    for block_y in 0..4 {
-        let start_y = block_y * BLOCK_SIZE;
-        for block_x in 0..4 {
-            let block_idx = (block_y * 4 + block_x) as usize;
-            let start_x = block_x * BLOCK_SIZE;
-            let block = &mut blocks[block_idx];
-
-            // Process each row in the block
-            for y in 0..BLOCK_SIZE as usize {
-                let src_row = ((start_y + y as u32) * NORMALIZED_SIZE + start_x) as usize;
-                let dst_row = y * BLOCK_SIZE as usize;
-
-                // Process pixels in the row
-                for x in 0..BLOCK_SIZE as usize {
-                    block[dst_row + x] = pixels[src_row + x] as f32 * SCALE;
-                }
-            }
-        }
-    }
-
+    extract_blocks_into_buffer(pixels, &mut blocks);
     blocks
 }
 

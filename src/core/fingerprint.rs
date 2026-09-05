@@ -1,6 +1,23 @@
 use crate::core::similarity::Similarity;
 use crate::hash::algorithms::HashAlgorithm;
 
+/// Writes a byte slice as lowercase hex.
+fn write_hex(f: &mut core::fmt::Formatter<'_>, bytes: &[u8]) -> core::fmt::Result {
+    for byte in bytes {
+        write!(f, "{:02x}", byte)?;
+    }
+    Ok(())
+}
+
+/// Debug-asserts the threshold range, then clamps for release builds.
+fn check_threshold(threshold: f32) -> f32 {
+    debug_assert!(
+        (0.0..=1.0).contains(&threshold),
+        "threshold must be in range [0.0, 1.0], got {threshold}"
+    );
+    threshold.clamp(0.0, 1.0)
+}
+
 /// Default weight for `AHash` in the combined score (10%).
 pub const DEFAULT_AHASH_WEIGHT: f32 = 0.10;
 /// Default weight for `PHash` in the combined score (60%).
@@ -331,11 +348,7 @@ impl ImageFingerprint {
     #[doc(alias = "match")]
     #[must_use]
     pub fn is_similar(&self, other: &ImageFingerprint, threshold: f32) -> bool {
-        debug_assert!(
-            (0.0..=1.0).contains(&threshold),
-            "threshold must be in range [0.0, 1.0], got {threshold}"
-        );
-        let clamped_threshold = threshold.clamp(0.0, 1.0);
+        let clamped_threshold = check_threshold(threshold);
         let sim = crate::core::similarity::compute_similarity(self, other);
         sim.score >= clamped_threshold
     }
@@ -345,9 +358,7 @@ impl core::fmt::Display for ImageFingerprint {
     /// Formats the fingerprint as hex: `exact:global:block0,block1,...,block15`
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         // Exact hash as hex
-        for byte in &self.exact {
-            write!(f, "{:02x}", byte)?;
-        }
+        write_hex(f, &self.exact)?;
         write!(f, ":{:016x}:", self.global_hash)?;
         for (i, h) in self.block_hashes.iter().enumerate() {
             if i > 0 {
@@ -603,12 +614,7 @@ impl MultiHashFingerprint {
     /// In release mode, out-of-range or NaN thresholds return false.
     #[must_use]
     pub fn is_similar(&self, other: &MultiHashFingerprint, threshold: f32) -> bool {
-        debug_assert!(
-            (0.0..=1.0).contains(&threshold),
-            "threshold must be in range [0.0, 1.0], got {}",
-            threshold
-        );
-        let clamped_threshold = threshold.clamp(0.0, 1.0);
+        let clamped_threshold = check_threshold(threshold);
         self.compare(other).score >= clamped_threshold
     }
 }
@@ -616,9 +622,7 @@ impl MultiHashFingerprint {
 impl core::fmt::Display for MultiHashFingerprint {
     /// Formats as `exact_hex|ahash_global|phash_global|dhash_global`
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        for byte in &self.exact {
-            write!(f, "{:02x}", byte)?;
-        }
+        write_hex(f, &self.exact)?;
         write!(
             f,
             "|{:016x}|{:016x}|{:016x}",
@@ -837,60 +841,30 @@ mod tests {
     }
 
     #[test]
-    fn coarse_key_zero_bits_returns_zero() {
-        let f = fp(0xDEAD_BEEF_CAFE_BABE, 0);
-        assert_eq!(f.coarse_key(0), 0);
-    }
-
-    #[test]
-    fn coarse_key_64_bits_returns_full_hash() {
+    fn coarse_key_bit_extraction_table() {
+        // (hash, bits, expected): top-N-bits extraction, edge widths, clamping.
         let hash = 0xDEAD_BEEF_CAFE_BABE;
-        let f = fp(hash, 0);
-        assert_eq!(f.coarse_key(64), hash);
-    }
+        for (h, bits, expected) in [
+            (hash, 0u32, 0u64),
+            (hash, 1, (hash >> 63) & 1),
+            (hash, 8, 0xDE),
+            (hash, 16, 0xDEAD),
+            (hash, 32, 0xDEAD_BEEF),
+            (hash, 64, hash),
+            (hash, 65, hash),
+            (hash, u32::MAX, hash),
+            (0x8000_0000_0000_0000, 1, 1),
+            (0x7FFF_FFFF_FFFF_FFFF, 1, 0),
+            (0xAB00_0000_0000_0000, 8, 0xAB),
+        ] {
+            assert_eq!(fp(h, 0).coarse_key(bits), expected, "bits={bits}");
+        }
 
-    #[test]
-    fn coarse_key_16_bits_extracts_top_bits() {
-        // 0xDEAD... top 16 bits = 0xDEAD
-        let f = fp(0xDEAD_BEEF_CAFE_BABE, 0);
-        assert_eq!(f.coarse_key(16), 0xDEAD);
-    }
-
-    #[test]
-    fn coarse_key_8_bits_extracts_top_byte() {
-        let f = fp(0xAB00_0000_0000_0000, 0);
-        assert_eq!(f.coarse_key(8), 0xAB);
-    }
-
-    #[test]
-    fn coarse_key_1_bit_extracts_msb() {
-        let f_high = fp(0x8000_0000_0000_0000, 0);
-        let f_low = fp(0x7FFF_FFFF_FFFF_FFFF, 0);
-        assert_eq!(f_high.coarse_key(1), 1);
-        assert_eq!(f_low.coarse_key(1), 0);
-    }
-
-    #[test]
-    fn coarse_key_deterministic() {
+        // Near-identical hashes share the coarse bucket; extraction is pure.
         let f = fp(0x1234_5678_9ABC_DEF0, 0);
         assert_eq!(f.coarse_key(16), f.coarse_key(16));
-    }
-
-    #[test]
-    fn coarse_key_similar_hashes_same_bucket() {
-        // Two hashes differing only in the low bits should share the same coarse key
         let f1 = fp(0xAAAA_BBBB_0000_0001, 0);
         let f2 = fp(0xAAAA_BBBB_FFFF_FFFE, 0);
         assert_eq!(f1.coarse_key(32), f2.coarse_key(32));
-    }
-
-    #[test]
-    fn coarse_key_clamped_above_64() {
-        // Values > 64 clamp to 64 (full hash) in all build modes.
-        let hash = 0xDEAD_BEEF_CAFE_BABE;
-        let f = fp(hash, 0);
-        assert_eq!(f.coarse_key(64), hash);
-        assert_eq!(f.coarse_key(65), hash);
-        assert_eq!(f.coarse_key(u32::MAX), hash);
     }
 }

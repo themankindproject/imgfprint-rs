@@ -107,24 +107,11 @@ mod tests {
     }
 
     #[test]
-    fn test_dhash_uniform_image() {
-        let img: [f32; 32 * 32] = [0.5; 32 * 32];
-        let hash = compute_dhash(&img);
-        assert_eq!(hash, 0);
-    }
-
-    #[test]
-    fn test_dhash_all_zeros() {
-        let img: [f32; 32 * 32] = [0.0; 32 * 32];
-        let hash = compute_dhash(&img);
-        assert_eq!(hash, 0);
-    }
-
-    #[test]
-    fn test_dhash_all_ones() {
-        let img: [f32; 32 * 32] = [1.0; 32 * 32];
-        let hash = compute_dhash(&img);
-        assert_eq!(hash, 0);
+    fn test_dhash_degenerate_inputs_all_zero() {
+        // No gradients anywhere -> no bits set.
+        for img in [[0.5; 32 * 32], [0.0; 32 * 32], [1.0; 32 * 32]] {
+            assert_eq!(compute_dhash(&img), 0);
+        }
     }
 
     #[test]
@@ -200,29 +187,22 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_hash_from_gradient_uniform() {
-        let pixels = [0.5f32; DHASH_SIZE];
-        let hash = compute_hash_from_gradient(&pixels);
-        assert_eq!(hash, 0);
-    }
+    fn test_compute_hash_from_gradient_degenerate() {
+        // Uniform -> 0. Ascending (left<right everywhere) -> 0 since bits
+        // only set on left>right. Descending -> nonzero.
+        let uniform = [0.5f32; DHASH_SIZE];
+        assert_eq!(compute_hash_from_gradient(&uniform), 0);
 
-    #[test]
-    fn test_compute_hash_from_gradient_ascending() {
-        let mut pixels = [0.0f32; DHASH_SIZE];
-        for (i, item) in pixels.iter_mut().enumerate().take(DHASH_SIZE) {
+        let mut ascending = [0.0f32; DHASH_SIZE];
+        for (i, item) in ascending.iter_mut().enumerate().take(DHASH_SIZE) {
             *item = i as f32 / DHASH_SIZE as f32;
         }
-        let hash = compute_hash_from_gradient(&pixels);
-        assert_eq!(hash, 0);
-    }
+        assert_eq!(compute_hash_from_gradient(&ascending), 0);
 
-    #[test]
-    fn test_compute_hash_from_gradient_descending() {
-        let mut pixels = [1.0f32; DHASH_SIZE];
-        for (i, item) in pixels.iter_mut().enumerate().take(DHASH_SIZE) {
+        let mut descending = [1.0f32; DHASH_SIZE];
+        for (i, item) in descending.iter_mut().enumerate().take(DHASH_SIZE) {
             *item = 1.0 - (i as f32 / DHASH_SIZE as f32);
         }
-        let hash = compute_hash_from_gradient(&pixels);
-        assert_ne!(hash, 0);
+        assert_ne!(compute_hash_from_gradient(&descending), 0);
     }
 }

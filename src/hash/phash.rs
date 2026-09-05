@@ -224,7 +224,7 @@ fn dct2_32(input: &[f32], output: &mut [f32]) -> Result<(), crate::error::ImgFpr
 /// # Errors
 ///
 /// Returns `ImgFprintError::ProcessingError` if the DCT computation fails.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn compute_phash(
     pixels: &[f32; DCT_SIZE * DCT_SIZE],
 ) -> Result<u64, crate::error::ImgFprintError> {
@@ -279,7 +279,7 @@ pub(crate) fn compute_phash_with_scratch(
 
 /// Computes pHash from a 64x64 block by downsampling to 32x32 first.
 #[inline]
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn compute_phash_from_64x64(
     block: &[f32; 64 * 64],
 ) -> Result<u64, crate::error::ImgFprintError> {

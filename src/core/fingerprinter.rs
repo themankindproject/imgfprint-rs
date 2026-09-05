@@ -85,12 +85,6 @@ macro_rules! trace_result_stage {
     }};
 }
 
-#[cfg(feature = "tracing")]
-fn count_results<S, T>(results: &[(S, Result<T, ImgFprintError>)]) -> (usize, usize) {
-    let failed = results.iter().filter(|(_, result)| result.is_err()).count();
-    (results.len() - failed, failed)
-}
-
 /// Context for high-performance fingerprinting with buffer reuse.
 ///
 /// Maintains a reusable preprocessor, hasher, and internal buffers
@@ -130,6 +124,13 @@ impl FingerprinterContext {
             blocks_buffer: Box::new([[0.0f32; 64 * 64]; 16]),
             global_region_buffer: Box::new([0.0f32; 32 * 32]),
         }
+    }
+
+    /// BLAKE3-digests `bytes` with the reusable hasher (reset first).
+    fn update_exact(&mut self, bytes: &[u8]) -> [u8; 32] {
+        self.exact_hasher.reset();
+        self.exact_hasher.update(bytes);
+        *self.exact_hasher.finalize().as_bytes()
     }
 
     /// Computes all perceptual hashes in parallel.
@@ -272,67 +273,14 @@ impl FingerprinterContext {
             rgb_owned.as_raw()
         };
 
-        let exact_hash: [u8; 32] = {
-            self.exact_hasher.reset();
-            self.exact_hasher.update(raw);
-            *self.exact_hasher.finalize().as_bytes()
-        };
+        let exact_hash: [u8; 32] = self.update_exact(raw);
 
         let normalized = self.preprocessor.normalize_as_slice(image)?;
 
         extract_global_region_into_buffer(normalized, &mut self.global_region_buffer);
         extract_blocks_into_buffer(normalized, &mut self.blocks_buffer);
 
-        let (ahash_fp, phash_fp, dhash_fp) = {
-            #[cfg(feature = "parallel")]
-            {
-                let (ahash_result, (phash_result, dhash_result)) = rayon::join(
-                    || Self::compute_ahash_data(&self.global_region_buffer, &self.blocks_buffer),
-                    || {
-                        rayon::join(
-                            || {
-                                Self::compute_phash_data(
-                                    &self.global_region_buffer,
-                                    &self.blocks_buffer,
-                                    &mut self.dct_scratch,
-                                )
-                            },
-                            || {
-                                Self::compute_dhash_data(
-                                    &self.global_region_buffer,
-                                    &self.blocks_buffer,
-                                )
-                            },
-                        )
-                    },
-                );
-                let (ahash_global, ahash_blocks) = ahash_result;
-                let (phash_global, phash_blocks) = phash_result?;
-                let (dhash_global, dhash_blocks) = dhash_result;
-                (
-                    ImageFingerprint::new(exact_hash, ahash_global, ahash_blocks),
-                    ImageFingerprint::new(exact_hash, phash_global, phash_blocks),
-                    ImageFingerprint::new(exact_hash, dhash_global, dhash_blocks),
-                )
-            }
-            #[cfg(not(feature = "parallel"))]
-            {
-                let (ahash_global, ahash_blocks) =
-                    Self::compute_ahash_data(&self.global_region_buffer, &self.blocks_buffer);
-                let (phash_global, phash_blocks) = Self::compute_phash_data(
-                    &self.global_region_buffer,
-                    &self.blocks_buffer,
-                    &mut self.dct_scratch,
-                )?;
-                let (dhash_global, dhash_blocks) =
-                    Self::compute_dhash_data(&self.global_region_buffer, &self.blocks_buffer);
-                (
-                    ImageFingerprint::new(exact_hash, ahash_global, ahash_blocks),
-                    ImageFingerprint::new(exact_hash, phash_global, phash_blocks),
-                    ImageFingerprint::new(exact_hash, dhash_global, dhash_blocks),
-                )
-            }
-        };
+        let (ahash_fp, phash_fp, dhash_fp) = self.compute_all_layers(exact_hash)?;
 
         Ok(MultiHashFingerprint::new(
             exact_hash, ahash_fp, phash_fp, dhash_fp,
@@ -419,11 +367,7 @@ impl FingerprinterContext {
         image_bytes: &[u8],
         preprocess: &PreprocessConfig,
     ) -> Result<MultiHashFingerprint, ImgFprintError> {
-        let exact_hash: [u8; 32] = trace_stage!("exact_hash", {
-            self.exact_hasher.reset();
-            self.exact_hasher.update(image_bytes);
-            *self.exact_hasher.finalize().as_bytes()
-        });
+        let exact_hash: [u8; 32] = trace_stage!("exact_hash", { self.update_exact(image_bytes) });
 
         let image = trace_result_stage!("decode", {
             decode_image_with_config(image_bytes, preprocess)
@@ -439,64 +383,76 @@ impl FingerprinterContext {
             extract_blocks_into_buffer(normalized, &mut self.blocks_buffer)
         });
 
-        let (ahash_fp, phash_fp, dhash_fp) = trace_stage!("multi_hash", {
-            #[cfg(feature = "parallel")]
-            {
-                let (ahash_result, (phash_result, dhash_result)) = rayon::join(
-                    || Self::compute_ahash_data(&self.global_region_buffer, &self.blocks_buffer),
-                    || {
-                        rayon::join(
-                            || {
-                                Self::compute_phash_data(
-                                    &self.global_region_buffer,
-                                    &self.blocks_buffer,
-                                    &mut self.dct_scratch,
-                                )
-                            },
-                            || {
-                                Self::compute_dhash_data(
-                                    &self.global_region_buffer,
-                                    &self.blocks_buffer,
-                                )
-                            },
-                        )
-                    },
-                );
-
-                let (ahash_global, ahash_blocks) = ahash_result;
-                let (phash_global, phash_blocks) = phash_result?;
-                let (dhash_global, dhash_blocks) = dhash_result;
-
-                (
-                    ImageFingerprint::new(exact_hash, ahash_global, ahash_blocks),
-                    ImageFingerprint::new(exact_hash, phash_global, phash_blocks),
-                    ImageFingerprint::new(exact_hash, dhash_global, dhash_blocks),
-                )
-            }
-
-            #[cfg(not(feature = "parallel"))]
-            {
-                let (ahash_global, ahash_blocks) =
-                    Self::compute_ahash_data(&self.global_region_buffer, &self.blocks_buffer);
-                let (phash_global, phash_blocks) = Self::compute_phash_data(
-                    &self.global_region_buffer,
-                    &self.blocks_buffer,
-                    &mut self.dct_scratch,
-                )?;
-                let (dhash_global, dhash_blocks) =
-                    Self::compute_dhash_data(&self.global_region_buffer, &self.blocks_buffer);
-
-                (
-                    ImageFingerprint::new(exact_hash, ahash_global, ahash_blocks),
-                    ImageFingerprint::new(exact_hash, phash_global, phash_blocks),
-                    ImageFingerprint::new(exact_hash, dhash_global, dhash_blocks),
-                )
-            }
-        });
+        let (ahash_fp, phash_fp, dhash_fp) =
+            trace_stage!("multi_hash", { self.compute_all_layers(exact_hash)? });
 
         Ok(MultiHashFingerprint::new(
             exact_hash, ahash_fp, phash_fp, dhash_fp,
         ))
+    }
+
+    /// Computes all three perceptual layers from the extracted buffers.
+    ///
+    /// Shared by [`compute_all_hashes`](Self::compute_all_hashes) and the
+    /// already-decoded [`fingerprint_image_with_preprocess`](Self::fingerprint_image_with_preprocess)
+    /// path so the parallel/sequential fan-out lives in exactly one place.
+    /// Output is bit-identical under both `parallel` configurations.
+    fn compute_all_layers(
+        &mut self,
+        exact_hash: [u8; 32],
+    ) -> Result<(ImageFingerprint, ImageFingerprint, ImageFingerprint), ImgFprintError> {
+        #[cfg(feature = "parallel")]
+        {
+            let (ahash_result, (phash_result, dhash_result)) = rayon::join(
+                || Self::compute_ahash_data(&self.global_region_buffer, &self.blocks_buffer),
+                || {
+                    rayon::join(
+                        || {
+                            Self::compute_phash_data(
+                                &self.global_region_buffer,
+                                &self.blocks_buffer,
+                                &mut self.dct_scratch,
+                            )
+                        },
+                        || {
+                            Self::compute_dhash_data(
+                                &self.global_region_buffer,
+                                &self.blocks_buffer,
+                            )
+                        },
+                    )
+                },
+            );
+
+            let (ahash_global, ahash_blocks) = ahash_result;
+            let (phash_global, phash_blocks) = phash_result?;
+            let (dhash_global, dhash_blocks) = dhash_result;
+
+            Ok((
+                ImageFingerprint::new(exact_hash, ahash_global, ahash_blocks),
+                ImageFingerprint::new(exact_hash, phash_global, phash_blocks),
+                ImageFingerprint::new(exact_hash, dhash_global, dhash_blocks),
+            ))
+        }
+
+        #[cfg(not(feature = "parallel"))]
+        {
+            let (ahash_global, ahash_blocks) =
+                Self::compute_ahash_data(&self.global_region_buffer, &self.blocks_buffer);
+            let (phash_global, phash_blocks) = Self::compute_phash_data(
+                &self.global_region_buffer,
+                &self.blocks_buffer,
+                &mut self.dct_scratch,
+            )?;
+            let (dhash_global, dhash_blocks) =
+                Self::compute_dhash_data(&self.global_region_buffer, &self.blocks_buffer);
+
+            Ok((
+                ImageFingerprint::new(exact_hash, ahash_global, ahash_blocks),
+                ImageFingerprint::new(exact_hash, phash_global, phash_blocks),
+                ImageFingerprint::new(exact_hash, dhash_global, dhash_blocks),
+            ))
+        }
     }
 
     fn compute_single_hash(
@@ -506,11 +462,7 @@ impl FingerprinterContext {
         preprocess: &PreprocessConfig,
         fast_resize: bool,
     ) -> Result<ImageFingerprint, ImgFprintError> {
-        let exact_hash: [u8; 32] = trace_stage!("exact_hash", {
-            self.exact_hasher.reset();
-            self.exact_hasher.update(image_bytes);
-            *self.exact_hasher.finalize().as_bytes()
-        });
+        let exact_hash: [u8; 32] = trace_stage!("exact_hash", { self.update_exact(image_bytes) });
 
         let image = trace_result_stage!("decode", {
             decode_image_with_config(image_bytes, preprocess)
@@ -874,6 +826,54 @@ impl ImageFingerprinter {
         crate::embed::semantic_similarity(a, b)
     }
 
+    /// Runs `f` over every image, preserving input order, in parallel when the
+    /// `parallel` feature is on (per-worker contexts) and sequentially otherwise.
+    fn run_batch<S, T, F>(images: &[(S, Vec<u8>)], stage: &'static str, f: F) -> Vec<(S, T)>
+    where
+        S: Send + Sync + Clone + 'static,
+        T: Send,
+        F: Fn(&mut FingerprinterContext, &[u8]) -> T + Send + Sync,
+    {
+        #[cfg(feature = "tracing")]
+        let start = std::time::Instant::now();
+
+        #[cfg(feature = "parallel")]
+        let results: Vec<(S, T)> = {
+            use rayon::prelude::*;
+
+            images
+                .par_iter()
+                .map_init(FingerprinterContext::new, |ctx, (id, bytes)| {
+                    (id.clone(), f(ctx, bytes))
+                })
+                .collect()
+        };
+
+        #[cfg(not(feature = "parallel"))]
+        let results: Vec<(S, T)> = {
+            let mut ctx = FingerprinterContext::new();
+            images
+                .iter()
+                .map(|(id, bytes)| (id.clone(), f(&mut ctx, bytes)))
+                .collect()
+        };
+
+        #[cfg(feature = "tracing")]
+        {
+            #[cfg(feature = "parallel")]
+            let mode = "parallel";
+            #[cfg(not(feature = "parallel"))]
+            let mode = "sequential";
+            debug!(
+                duration_ms = start.elapsed().as_millis(),
+                count = results.len(),
+                "{mode} {stage} completed"
+            );
+        }
+
+        results
+    }
+
     /// Computes fingerprints for multiple images in batch.
     ///
     /// Processes each image independently and returns results in the same order.
@@ -886,48 +886,7 @@ impl ImageFingerprinter {
     where
         S: Send + Sync + Clone + 'static,
     {
-        #[cfg(feature = "tracing")]
-        let start = std::time::Instant::now();
-
-        #[cfg(feature = "parallel")]
-        {
-            use rayon::prelude::*;
-
-            let results: Vec<(S, Result<MultiHashFingerprint, ImgFprintError>)> = images
-                .par_iter()
-                .map_init(FingerprinterContext::new, |ctx, (id, bytes)| {
-                    (id.clone(), ctx.fingerprint(bytes))
-                })
-                .collect();
-
-            #[cfg(feature = "tracing")]
-            let (succeeded, failed) = count_results(&results);
-            #[cfg(feature = "tracing")]
-            debug!(
-                duration_ms = start.elapsed().as_millis(),
-                succeeded, failed, "parallel batch completed"
-            );
-
-            results
-        }
-
-        #[cfg(not(feature = "parallel"))]
-        {
-            let results: Vec<(S, Result<MultiHashFingerprint, ImgFprintError>)> = images
-                .iter()
-                .map(|(id, bytes)| (id.clone(), Self::fingerprint(bytes)))
-                .collect();
-
-            #[cfg(feature = "tracing")]
-            let (succeeded, failed) = count_results(&results);
-            #[cfg(feature = "tracing")]
-            debug!(
-                duration_ms = start.elapsed().as_millis(),
-                succeeded, failed, "sequential batch completed"
-            );
-
-            results
-        }
+        Self::run_batch(images, "batch", |ctx, bytes| ctx.fingerprint(bytes))
     }
 
     /// Computes fingerprints with specific algorithm for multiple images.
@@ -939,48 +898,9 @@ impl ImageFingerprinter {
     where
         S: Send + Sync + Clone + 'static,
     {
-        #[cfg(feature = "tracing")]
-        let start = std::time::Instant::now();
-
-        #[cfg(feature = "parallel")]
-        {
-            use rayon::prelude::*;
-
-            let results: Vec<(S, Result<ImageFingerprint, ImgFprintError>)> = images
-                .par_iter()
-                .map_init(FingerprinterContext::new, |ctx, (id, bytes)| {
-                    (id.clone(), ctx.fingerprint_with(bytes, algorithm))
-                })
-                .collect();
-
-            #[cfg(feature = "tracing")]
-            let (succeeded, failed) = count_results(&results);
-            #[cfg(feature = "tracing")]
-            debug!(
-                duration_ms = start.elapsed().as_millis(),
-                succeeded, failed, "parallel batch_with completed"
-            );
-
-            results
-        }
-
-        #[cfg(not(feature = "parallel"))]
-        {
-            let results: Vec<(S, Result<ImageFingerprint, ImgFprintError>)> = images
-                .iter()
-                .map(|(id, bytes)| (id.clone(), Self::fingerprint_with(bytes, algorithm)))
-                .collect();
-
-            #[cfg(feature = "tracing")]
-            let (succeeded, failed) = count_results(&results);
-            #[cfg(feature = "tracing")]
-            debug!(
-                duration_ms = start.elapsed().as_millis(),
-                succeeded, failed, "sequential batch_with completed"
-            );
-
-            results
-        }
+        Self::run_batch(images, "batch_with", |ctx, bytes| {
+            ctx.fingerprint_with(bytes, algorithm)
+        })
     }
 
     /// Computes fingerprints for multiple images in chunks to limit memory usage.

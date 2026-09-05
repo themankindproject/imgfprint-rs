@@ -251,81 +251,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_hash_similarity_distance_zero() {
-        assert_eq!(hash_similarity(0), 1.0);
+    fn test_hash_similarity_table() {
+        // (distance, expected similarity): 1.0 - d/64, floored at 0 past 64.
+        for (distance, expected) in [(0, 1.0), (16, 0.75), (32, 0.5), (64, 0.0), (100, 0.0)] {
+            assert_eq!(hash_similarity(distance), expected, "d={distance}");
+        }
     }
 
     #[test]
-    fn test_hash_similarity_distance_32() {
-        assert_eq!(hash_similarity(32), 0.5);
+    fn test_hamming_distance_table() {
+        // (a, b, expected): identity, complement, single-bit, nibble-swap, F00F.
+        for (a, b, expected) in [
+            (0u64, 0u64, 0u32),
+            (u64::MAX, u64::MAX, 0),
+            (0x1234567890ABCDEF, 0x1234567890ABCDEF, 0),
+            (0, u64::MAX, 64),
+            (u64::MAX, 0, 64),
+            (0, 1, 1),
+            (0, 2, 1),
+            (0, 4, 1),
+            (0b10101010, 0b01010101, 8),
+            (0xFF00FF00, 0x00FF00FF, 32),
+        ] {
+            assert_eq!(hamming_distance(a, b), expected, "{a:#x} vs {b:#x}");
+            assert_eq!(hamming_distance(a, b), hamming_distance(b, a));
+        }
     }
 
     #[test]
-    fn test_hash_similarity_distance_64() {
-        assert_eq!(hash_similarity(64), 0.0);
-    }
-
-    #[test]
-    fn test_hash_similarity_distance_greater_than_64() {
-        assert_eq!(hash_similarity(100), 0.0);
-    }
-
-    #[test]
-    fn test_hash_similarity_distance_16() {
-        assert_eq!(hash_similarity(16), 0.75);
-    }
-
-    #[test]
-    fn test_hamming_distance_identical() {
-        assert_eq!(hamming_distance(0, 0), 0);
-        assert_eq!(hamming_distance(u64::MAX, u64::MAX), 0);
-        assert_eq!(hamming_distance(0x1234567890ABCDEF, 0x1234567890ABCDEF), 0);
-    }
-
-    #[test]
-    fn test_hamming_distance_opposite() {
-        assert_eq!(hamming_distance(0, u64::MAX), 64);
-        assert_eq!(hamming_distance(u64::MAX, 0), 64);
-    }
-
-    #[test]
-    fn test_hamming_distance_single_bit() {
-        assert_eq!(hamming_distance(0, 1), 1);
-        assert_eq!(hamming_distance(0, 2), 1);
-        assert_eq!(hamming_distance(0, 4), 1);
-    }
-
-    #[test]
-    fn test_hamming_distance_known_values() {
-        assert_eq!(hamming_distance(0b10101010, 0b01010101), 8);
-        assert_eq!(hamming_distance(0xFF00FF00, 0x00FF00FF), 32);
-    }
-
-    #[test]
-    fn test_hamming_distance_symmetric() {
-        let a: u64 = 0x1234567890ABCDEF;
-        let b: u64 = 0xFEDCBA0987654321;
-        assert_eq!(hamming_distance(a, b), hamming_distance(b, a));
-    }
-
-    #[test]
-    fn test_compute_block_similarity_identical() {
-        let blocks_a = [1u64; 16];
-        let blocks_b = [1u64; 16];
-        let sim = compute_block_similarity(&blocks_a, &blocks_b);
+    fn test_compute_block_similarity_extremes() {
+        // Identical blocks (even half-filled) score 1.0; complements score 0.0.
+        let identical = [1u64; 16];
+        let sim = compute_block_similarity(&identical, &identical);
         assert!((sim - 1.0).abs() < 1e-6);
+
+        let zeros = [0u64; 16];
+        let ones = [u64::MAX; 16];
+        assert_eq!(compute_block_similarity(&zeros, &ones), 0.0);
     }
 
     #[test]
-    fn test_compute_block_similarity_all_different() {
-        let blocks_a = [0u64; 16];
-        let blocks_b = [u64::MAX; 16];
-        let sim = compute_block_similarity(&blocks_a, &blocks_b);
-        assert_eq!(sim, 0.0);
-    }
-
-    #[test]
-    fn test_compute_block_similarity_partial_match() {
+    fn test_compute_block_similarity_partial_and_complement() {
+        // Half the blocks equal (rest identical 0s) still scores 1.0 ...
         let mut blocks_a = [0u64; 16];
         let mut blocks_b = [0u64; 16];
 
@@ -340,17 +307,13 @@ mod tests {
             "Expected 1.0 for half matching blocks (others are identical 0s), got {}",
             sim
         );
-    }
 
-    #[test]
-    fn test_compute_block_similarity_all_above_threshold() {
-        let blocks_a = [0u64; 16];
-        let mut blocks_b = [0u64; 16];
-        for i in 0..16 {
-            blocks_b[i] = blocks_a[i] ^ u64::MAX;
+        // ... while full complements (every block above threshold) score 0.0.
+        let mut comp_b = [0u64; 16];
+        for (a, b) in blocks_a.iter().zip(comp_b.iter_mut()) {
+            *b = a ^ u64::MAX;
         }
-        let sim = compute_block_similarity(&blocks_a, &blocks_b);
-        assert_eq!(sim, 0.0);
+        assert_eq!(compute_block_similarity(&blocks_a, &comp_b), 0.0);
     }
 
     #[test]
@@ -390,63 +353,37 @@ mod tests {
         assert!(sim.perceptual_distance == 1);
     }
 
-    #[test]
-    fn test_similarity_perfect() {
-        let sim = Similarity::perfect();
-        assert_eq!(sim.score, 1.0);
-        assert!(sim.exact_match);
-        assert_eq!(sim.perceptual_distance, 0);
+    fn sim(score: f32) -> Similarity {
+        Similarity {
+            score,
+            exact_match: false,
+            perceptual_distance: 16,
+        }
     }
 
     #[test]
-    fn test_similarity_clone_copy() {
-        let sim = Similarity {
-            score: 0.75,
-            exact_match: false,
-            perceptual_distance: 16,
-        };
-        let sim2 = sim;
-        assert_eq!(sim.score, sim2.score);
-        assert_eq!(sim.exact_match, sim2.exact_match);
-        assert_eq!(sim.perceptual_distance, sim2.perceptual_distance);
-    }
+    fn test_similarity_value_semantics() {
+        let perfect = Similarity::perfect();
+        assert_eq!(perfect.score, 1.0);
+        assert!(perfect.exact_match);
+        assert_eq!(perfect.perceptual_distance, 0);
 
-    #[test]
-    fn test_similarity_partial_eq() {
-        let sim1 = Similarity {
-            score: 0.75,
-            exact_match: false,
-            perceptual_distance: 16,
-        };
-        let sim2 = Similarity {
-            score: 0.75,
-            exact_match: false,
-            perceptual_distance: 16,
-        };
-        let sim3 = Similarity {
-            score: 0.80,
-            exact_match: false,
-            perceptual_distance: 12,
-        };
-        assert_eq!(sim1, sim2);
-        assert_ne!(sim1, sim3);
+        // Copy + PartialEq + PartialOrd ride on score.
+        let b = sim(0.75);
+        let c = sim(0.80);
+        let b_copy = b;
+        assert_eq!(b_copy, sim(0.75));
+        assert_ne!(b, c);
+        assert!(sim(0.5) < sim(0.8));
+        assert!(sim(0.8) > sim(0.5));
     }
 
     #[test]
     fn test_weighted_combination_formula() {
-        let global_hash1 = 0x0000000000000000;
-        let global_hash2 = 0x0000000000000000;
+        let blocks = [0xAAAAAAAAAAAAAAAA; 16];
 
-        let mut blocks1 = [0u64; 16];
-        let mut blocks2 = [0u64; 16];
-
-        for i in 0..16 {
-            blocks1[i] = 0xAAAAAAAAAAAAAAAA;
-            blocks2[i] = 0xAAAAAAAAAAAAAAAA;
-        }
-
-        let fp1 = ImageFingerprint::new([1u8; 32], global_hash1, blocks1);
-        let fp2 = ImageFingerprint::new([2u8; 32], global_hash2, blocks2);
+        let fp1 = ImageFingerprint::new([1u8; 32], 0x0000000000000000, blocks);
+        let fp2 = ImageFingerprint::new([2u8; 32], 0x0000000000000000, blocks);
 
         let sim = compute_similarity(&fp1, &fp2);
 
@@ -456,33 +393,13 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_score_only_identical() {
+    fn test_compute_score_only_extremes() {
         let fp = ImageFingerprint::new([1u8; 32], 0xABCD, [0xABCD; 16]);
         let score = compute_score_only(&fp, &fp, 0.4, 0.6, 32);
         assert!((score - 1.0).abs() < 1e-6);
-    }
 
-    #[test]
-    fn test_compute_score_only_different() {
         let fp1 = ImageFingerprint::new([1u8; 32], 0, [0u64; 16]);
         let fp2 = ImageFingerprint::new([2u8; 32], u64::MAX, [u64::MAX; 16]);
-        let score = compute_score_only(&fp1, &fp2, 0.4, 0.6, 32);
-        assert!(score < 0.1);
-    }
-
-    #[test]
-    fn test_similarity_partial_ord() {
-        let a = Similarity {
-            score: 0.5,
-            exact_match: false,
-            perceptual_distance: 32,
-        };
-        let b = Similarity {
-            score: 0.8,
-            exact_match: false,
-            perceptual_distance: 12,
-        };
-        assert!(a < b);
-        assert!(b > a);
+        assert!(compute_score_only(&fp1, &fp2, 0.4, 0.6, 32) < 0.1);
     }
 }

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Internal dedupe, no behavior change (~340 lines removed)**: `extract_*_from_raw` delegate to the `_into_buffer` hot path; single `validate_dimensions` guard in decode; shared `update_exact` / `compute_all_layers` / `run_batch` in the fingerprinter; shared `write_hex` / `check_threshold` in fingerprint types; `LocalProviderConfig::default` delegates to `clip_vit_base_patch32`. Test-only PHash entry points are now `cfg(test)` so the release binary no longer carries them.
+- **Local ONNX preprocess loop**: CHW fill reads the packed RGB buffer directly instead of per-pixel `get_pixel`, with mean/std hoisted out of the inner loop. Same values, same LOC.
+- **Table-driven unit tests**: trivial hash/similarity/coarse-key tests collapsed into tables (37 redundant test fns removed, same assertions; `Display` and 32-bit `coarse_key` now covered).
+
 ## [0.4.6] - 2026-08-16
 
 ### Added

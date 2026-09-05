@@ -55,13 +55,7 @@ pub struct LocalProviderConfig {
 
 impl Default for LocalProviderConfig {
     fn default() -> Self {
-        Self {
-            input_size: 224,
-            // CLIP normalization values
-            normalize_mean: [0.481_454_66, 0.457_827_5, 0.408_210_73],
-            normalize_std: [0.268_629_54, 0.261_302_6, 0.275_777_1],
-            normalize_output: true,
-        }
+        Self::clip_vit_base_patch32()
     }
 }
 
@@ -264,19 +258,21 @@ impl LocalProvider {
 
         // Create tensor with shape [1, 3, H, W] (batch, channels, height, width)
         let size = self.config.input_size;
+        let raw = rgb_img.as_raw();
+        debug_assert_eq!(raw.len(), 3 * size * size);
         let mut tensor_data: Vec<f32> = Vec::with_capacity(3 * size * size);
 
-        // Fill in CHW format (channels first)
+        // Fill in CHW format (channels first), reading the packed RGB buffer
+        // directly instead of per-pixel `get_pixel` (which re-validates
+        // bounds on every access).
         for c in 0..3 {
-            for y in 0..size {
-                for x in 0..size {
-                    let pixel = rgb_img.get_pixel(x as u32, y as u32);
-                    let value = pixel[c] as f32 / 255.0;
-                    // Normalize
-                    let normalized =
-                        (value - self.config.normalize_mean[c]) / self.config.normalize_std[c];
-                    tensor_data.push(normalized);
-                }
+            let mean = self.config.normalize_mean[c];
+            let std = self.config.normalize_std[c];
+            let mut src = c;
+            for _ in 0..size * size {
+                // Normalize
+                tensor_data.push((raw[src] as f32 / 255.0 - mean) / std);
+                src += 3;
             }
         }
 
