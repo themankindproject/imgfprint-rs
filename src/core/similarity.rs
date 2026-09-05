@@ -105,6 +105,10 @@ pub fn compute_similarity(a: &ImageFingerprint, b: &ImageFingerprint) -> Similar
 
 /// Computes similarity between two fingerprints with a custom block threshold.
 ///
+/// NOTE: crate-internal (`mod core` is private, so nothing here is reachable
+/// downstream despite the `pub` visibility). Promote to a `lib.rs` re-export
+/// if downstream block-level comparison is ever wanted.
+///
 /// # Arguments
 /// * `a` - First fingerprint
 /// * `b` - Second fingerprint
@@ -113,7 +117,7 @@ pub fn compute_similarity(a: &ImageFingerprint, b: &ImageFingerprint) -> Similar
 ///
 /// See [`compute_similarity`] for weight details.
 #[must_use]
-pub fn compute_similarity_with_threshold(
+pub(crate) fn compute_similarity_with_threshold(
     a: &ImageFingerprint,
     b: &ImageFingerprint,
     block_threshold: u32,
@@ -128,7 +132,7 @@ pub fn compute_similarity_with_threshold(
 /// clamped to `[0.0, 1.0]`. The default helpers ([`compute_similarity`],
 /// [`compute_similarity_with_threshold`]) use `0.4` / `0.6`.
 #[must_use]
-pub fn compute_similarity_with_weights(
+pub(crate) fn compute_similarity_with_weights(
     a: &ImageFingerprint,
     b: &ImageFingerprint,
     global_weight: f32,
@@ -180,13 +184,18 @@ pub(crate) fn compute_score_only(
 /// Compares corresponding blocks from the 4x4 grid and filters out blocks
 /// with Hamming distance above the default threshold (32).
 /// Use [`compute_block_similarity_with_threshold`] for custom thresholds.
+///
+/// NOTE: crate-internal (see [`compute_similarity_with_threshold`]).
+/// Test-only: production goes through [`compute_similarity_with_weights`].
+#[cfg(test)]
 #[must_use]
-#[allow(dead_code)] // Public API convenience function - used by downstream consumers
-pub fn compute_block_similarity(a: &[u64; 16], b: &[u64; 16]) -> f32 {
+pub(crate) fn compute_block_similarity(a: &[u64; 16], b: &[u64; 16]) -> f32 {
     compute_block_similarity_with_threshold(a, b, BLOCK_DISTANCE_THRESHOLD)
 }
 
 /// Computes block-level similarity with a custom distance threshold.
+///
+/// NOTE: crate-internal (see [`compute_similarity_with_threshold`]).
 ///
 /// # Arguments
 /// * `a` - Block hashes from first image
@@ -194,7 +203,7 @@ pub fn compute_block_similarity(a: &[u64; 16], b: &[u64; 16]) -> f32 {
 /// * `max_distance` - Maximum Hamming distance for a block to be included.
 ///   Lower values exclude more blocks (stricter matching).
 ///   Higher values include more blocks (looser matching).
-pub fn compute_block_similarity_with_threshold(
+pub(crate) fn compute_block_similarity_with_threshold(
     a: &[u64; 16],
     b: &[u64; 16],
     max_distance: u32,

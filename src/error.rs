@@ -109,8 +109,8 @@ pub enum ImgFprintError {
     ///
     /// ## Errors
     /// This error occurs when:
-    /// - A [`MultiHashConfig`](crate::MultiHashConfig) contains NaN or
-    ///   negative weights (see `MultiHashConfig::validate`)
+    /// - A [`MultiHashConfig`](crate::MultiHashConfig) contains NaN,
+    ///   infinite, or negative weights (see `MultiHashConfig::validate`)
     /// - A block distance threshold is outside the valid 0–64 range
     #[error("invalid config: {0}")]
     InvalidConfig(String),

@@ -181,6 +181,19 @@ fn multi_hash_config_validate_rejects_nan_negative_and_bad_threshold() {
         bad_threshold.validate(),
         Err(ImgFprintError::InvalidConfig(_))
     ));
+
+    for inf in [f32::INFINITY, f32::NEG_INFINITY] {
+        let infinite = MultiHashConfig {
+            phash_weight: inf,
+            ..base
+        };
+        assert!(
+            matches!(infinite.validate(), Err(ImgFprintError::InvalidConfig(_))),
+            "infinite weight {inf} must be rejected"
+        );
+        // Sanitized form excludes the algorithm instead of saturating at 1.0.
+        assert_eq!(infinite.sanitized().phash_weight, 0.0);
+    }
 }
 
 #[test]

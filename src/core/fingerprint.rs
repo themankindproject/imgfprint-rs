@@ -103,10 +103,11 @@ impl MultiHashConfig {
     ///
     /// Returns [`ImgFprintError::InvalidConfig`] when:
     /// - any weight (`ahash_weight`, `phash_weight`, `dhash_weight`,
-    ///   `global_weight`, `block_weight`) is NaN or negative — NaN weights
-    ///   poison the score (NaN propagates through the weighted sum and makes
-    ///   `is_similar` silently return `false`), and negative weights invert
-    ///   similarity semantics;
+    ///   `global_weight`, `block_weight`) is NaN, infinite, or negative —
+    ///   NaN weights poison the score (NaN propagates through the weighted
+    ///   sum and makes `is_similar` silently return `false`), infinite
+    ///   weights saturate the score at `1.0` regardless of content, and
+    ///   negative weights invert similarity semantics;
     /// - `block_distance_threshold` exceeds 64 (the maximum Hamming distance
     ///   between two 64-bit hashes).
     ///
@@ -135,6 +136,11 @@ impl MultiHashConfig {
                     "{name} is NaN"
                 )));
             }
+            if value.is_infinite() {
+                return Err(crate::error::ImgFprintError::invalid_config(format!(
+                    "{name} is infinite ({value})"
+                )));
+            }
             if value < 0.0 {
                 return Err(crate::error::ImgFprintError::invalid_config(format!(
                     "{name} is negative ({value})"
@@ -152,7 +158,8 @@ impl MultiHashConfig {
 
     /// Returns a sanitized copy of this config that is safe to score with.
     ///
-    /// - NaN weights become `0.0` (the algorithm is excluded from the score).
+    /// - NaN or infinite weights become `0.0` (the algorithm is excluded from
+    ///   the score).
     /// - Negative weights are clamped to `0.0`.
     /// - `block_distance_threshold` is clamped to `0..=64`.
     ///
@@ -161,7 +168,13 @@ impl MultiHashConfig {
     /// [`validate`](Self::validate) is the strict alternative.
     #[must_use]
     pub fn sanitized(&self) -> Self {
-        let sanitize = |v: f32| if v.is_nan() || v < 0.0 { 0.0 } else { v };
+        let sanitize = |v: f32| {
+            if !v.is_finite() || v < 0.0 {
+                0.0
+            } else {
+                v
+            }
+        };
         Self {
             ahash_weight: sanitize(self.ahash_weight),
             phash_weight: sanitize(self.phash_weight),
@@ -524,8 +537,8 @@ impl MultiHashFingerprint {
     /// All knobs from [`MultiHashConfig`] are honored; defaults reproduce
     /// [`compare`](Self::compare). See [`MultiHashConfig`] for examples.
     ///
-    /// The config is sanitized before scoring: NaN/negative weights are
-    /// treated as `0.0` and `block_distance_threshold` is clamped to `0..=64`,
+    /// The config is sanitized before scoring: NaN/infinite/negative weights
+    /// are treated as `0.0` and `block_distance_threshold` is clamped to `0..=64`,
     /// so a malformed config can never produce a NaN score. Use
     /// [`MultiHashConfig::validate`] if you need to reject bad configs
     /// instead.
