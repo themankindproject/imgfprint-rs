@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Local ONNX preprocess loop**: CHW fill reads the packed RGB buffer directly instead of per-pixel `get_pixel`, with mean/std hoisted out of the inner loop. Same values, same LOC.
 - **Table-driven unit tests**: trivial hash/similarity/coarse-key tests collapsed into tables (37 redundant test fns removed, same assertions; `Display` and 32-bit `coarse_key` now covered).
 
+### Fixed
+
+- **Native RGBA8/Luma8 normalize lanes + fast exact-hash conversions**: non-RGB8 inputs no longer pay full-frame `to_rgb8()` (per-pixel dispatch) in normalize or exact-hash. RGBA8 resizes U8x4→U8x4 with `mul_div_alpha: false` then strips alpha; Luma8 resizes U8→U8 straight into the gray buffer; exact-hash uses raw triplicate/stride-copy producing byte-identical input. Luma8 `fingerprint_image` at 512px: 13 ms → 1.9 ms. Zero hash-bit drift (parity tests + audit suite green). Part of #50.
+
 ## [0.4.6] - 2026-08-16
 
 ### Added
