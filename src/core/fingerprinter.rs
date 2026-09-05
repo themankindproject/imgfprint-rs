@@ -264,13 +264,37 @@ impl FingerprinterContext {
         let (width, height) = image.dimensions();
         crate::imgproc::decode::validate_dimensions(width, height, preprocess)?;
 
-        // Compute exact hash from RGB8 pixels, avoiding clone when already RGB8
+        // Compute exact hash from RGB8 pixels, avoiding clone when already RGB8.
+        // Luma8/RGBA8 use fast raw (triplicate/stride-copy) conversions that
+        // produce byte-identical input to `to_rgb8()` (verified: Luma maps
+        // Y -> (Y,Y,Y); RGBA drops alpha) without its per-pixel dispatch cost.
+        // The converted bytes feed the hasher directly; no intermediate image.
         let rgb_owned;
-        let raw: &[u8] = if let image::DynamicImage::ImageRgb8(rgb) = image {
-            rgb.as_raw()
-        } else {
-            rgb_owned = image.to_rgb8();
-            rgb_owned.as_raw()
+        let raw: &[u8] = match image {
+            image::DynamicImage::ImageRgb8(rgb) => rgb.as_raw(),
+            image::DynamicImage::ImageLuma8(gray) => {
+                let src = gray.as_raw();
+                let mut buf = Vec::with_capacity(src.len() * 3);
+                for &y in src {
+                    buf.extend_from_slice(&[y, y, y]);
+                }
+                rgb_owned = buf;
+                &rgb_owned
+            }
+            image::DynamicImage::ImageRgba8(rgba) => {
+                let src = rgba.as_raw();
+                let mut buf = Vec::with_capacity(src.len() / 4 * 3);
+                let (chunks, _) = src.as_chunks::<4>();
+                for px in chunks {
+                    buf.extend_from_slice(&px[..3]);
+                }
+                rgb_owned = buf;
+                &rgb_owned
+            }
+            _ => {
+                rgb_owned = image.to_rgb8().into_raw();
+                &rgb_owned
+            }
         };
 
         let exact_hash: [u8; 32] = self.update_exact(raw);
@@ -828,7 +852,11 @@ impl ImageFingerprinter {
 
     /// Runs `f` over every image, preserving input order, in parallel when the
     /// `parallel` feature is on (per-worker contexts) and sequentially otherwise.
-    fn run_batch<S, T, F>(images: &[(S, Vec<u8>)], stage: &'static str, f: F) -> Vec<(S, T)>
+    fn run_batch<S, T, F>(
+        images: &[(S, Vec<u8>)],
+        #[cfg_attr(not(feature = "tracing"), allow(unused_variables))] stage: &'static str,
+        f: F,
+    ) -> Vec<(S, T)>
     where
         S: Send + Sync + Clone + 'static,
         T: Send,

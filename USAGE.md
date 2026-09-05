@@ -1089,10 +1089,19 @@ let sim = ImageFingerprinter::compare(&fp1, &fp2);
 
 Supported formats: PNG, JPEG, GIF, WebP, BMP
 
+Measured decode share of a full multi-hash fingerprint (`cargo run --release --example stage_split`, same pixels, median):
+
+| Input | 300px full | decode share | 1024px full | decode share |
+|-------|-----------|--------------|-------------|--------------|
+| PNG | 3.3 ms | 48% | 21.4 ms | 86% |
+| JPEG (q90) | 2.0 ms | 39% | 11.7 ms | 76% |
+
+Decode dominates and grows superlinearly with pixels — PNG inflate+unfilter is ~2x JPEG at the same resolution. Prefer JPEG inputs for photo corpora; feed 256–1024px (see §5) since larger images are downscaled to 256x256 internally anyway.
+
 | Format | Decode Speed | Best For |
 |--------|--------------|----------|
-| PNG | Fast | Synthetic images, screenshots |
-| JPEG | Medium | Photos (use `zune-jpeg` for 2-3x speedup) |
+| PNG | Slow (~2x JPEG) | Synthetic images, screenshots (lossless matters) |
+| JPEG | Medium | Photos |
 | WebP | Slow | Web-optimized images |
 | GIF | Fast | Simple graphics |
 
@@ -1106,7 +1115,19 @@ Supported formats: PNG, JPEG, GIF, WebP, BMP
 
 **Note:** Larger images are downscaled to 256x256 internally, so feeding very large images wastes decode time.
 
-### 6. `no_std` Comparison Layer
+### 6. Pre-decoded Images Skip Decode Entirely
+
+If you already hold pixels (video frames, in-memory compositions), `fingerprint_image` skips decode — the dominant stage (§4):
+
+```rust
+let mut ctx = FingerprinterContext::new();
+// frame: image::DynamicImage from your decoder
+let fp = ctx.fingerprint_image(&frame)?;
+```
+
+`fingerprint_image` on 512px RGB runs ~1.5 ms (vs ~2–3 ms via bytes including decode). RGBA8 and Luma8 inputs take native resizer lanes — no `to_rgb8()` conversion cost. Note the exact-hash contract differs: bytes paths hash file bytes, `fingerprint_image` hashes RGB8 pixels (see §Exact Hash Semantics).
+
+### 7. `no_std` Comparison Layer
 
 The similarity computation module (`Similarity`, `compute_similarity`, `hamming_distance`, `hash_similarity`) uses only `core` primitives and the `subtle` crate — both `no_std`-compatible. If you only need to *compare* pre-computed fingerprints (e.g., on an embedded target or in a WASM module), the comparison types work without `std`.
 
