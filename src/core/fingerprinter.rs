@@ -284,7 +284,8 @@ impl FingerprinterContext {
             image::DynamicImage::ImageRgba8(rgba) => {
                 let src = rgba.as_raw();
                 let mut buf = Vec::with_capacity(src.len() / 4 * 3);
-                for px in src.chunks_exact(4) {
+                let (chunks, _) = src.as_chunks::<4>();
+                for px in chunks {
                     buf.extend_from_slice(&px[..3]);
                 }
                 rgb_owned = buf;

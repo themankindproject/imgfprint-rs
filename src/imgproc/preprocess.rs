@@ -337,10 +337,9 @@ impl Preprocessor {
                 // Strip alpha in place: dst_buffer[i] = resized_rgba[4i..4i+3].
                 // Both buffers are exactly 256x256; dst was fully sized above.
                 let dst_buf = dst.buffer_mut();
-                for (dst_px, src_px) in dst_buf
-                    .chunks_exact_mut(3)
-                    .zip(resized_rgba.chunks_exact(4))
-                {
+                let (dst_chunks, _) = dst_buf.as_chunks_mut::<3>();
+                let (src_chunks, _) = resized_rgba.as_chunks::<4>();
+                for (dst_px, src_px) in dst_chunks.iter_mut().zip(src_chunks.iter()) {
                     dst_px.copy_from_slice(&src_px[..3]);
                 }
                 self.rgba_buffer = resized_rgba;
