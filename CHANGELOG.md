@@ -7,21 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Embedding deserialization now validates**: derived `Deserialize` let empty / zero-norm / oversized vectors bypass `new_with_model` guards via serde_json and bincode (probed live). Deserialization now goes through a `try_from` wire type running the same validation; malformed input is rejected as `InvalidEmbedding`.
+- **Infinite config weights rejected**: `MultiHashConfig::validate` accepted `inf` (checked only NaN/negative); `sanitized` now maps non-finite weights to `0.0` instead of saturating scores at `1.0`.
+- **Decode alloc-cap overflow hardening**: `max_alloc` computation uses saturating math so a pathological custom `max_dimension` yields a huge cap, never a wrapped-small one.
+
 ### Changed
 
+- **Removed test-only `Preprocessor::normalize`**: the `GrayImage`-returning wrapper existed solely for 3 tests; they now assert directly on `normalize_as_slice` (stronger: content + buffer-reuse checks).
+- **Honest visibility in `similarity`**: `compute_similarity_with_threshold`, `compute_similarity_with_weights`, and `compute_block_similarity_with_threshold` demoted to `pub(crate)` (`mod core` is private, so they never reached downstream); test-only `compute_block_similarity` is now `cfg(test)`. Removes the misleading `allow(dead_code)`.
+- **Native RGBA8/Luma8 normalize lanes + fast exact-hash conversions**: non-RGB8 inputs no longer pay full-frame `to_rgb8()` (per-pixel dispatch) in normalize or exact-hash. RGBA8 resizes U8x4→U8x4 with `mul_div_alpha: false` then strips alpha; Luma8 resizes U8→U8 straight into the gray buffer; exact-hash uses raw triplicate/stride-copy producing byte-identical input. Luma8 `fingerprint_image` at 512px: 13 ms → 1.9 ms. Zero hash-bit drift (parity tests + audit suite green). Part of #50.
 - **Internal dedupe, no behavior change (~340 lines removed)**: `extract_*_from_raw` delegate to the `_into_buffer` hot path; single `validate_dimensions` guard in decode; shared `update_exact` / `compute_all_layers` / `run_batch` in the fingerprinter; shared `write_hex` / `check_threshold` in fingerprint types; `LocalProviderConfig::default` delegates to `clip_vit_base_patch32`. Test-only PHash entry points are now `cfg(test)` so the release binary no longer carries them.
 - **Local ONNX preprocess loop**: CHW fill reads the packed RGB buffer directly instead of per-pixel `get_pixel`, with mean/std hoisted out of the inner loop. Same values, same LOC.
 - **Table-driven unit tests**: trivial hash/similarity/coarse-key tests collapsed into tables (37 redundant test fns removed, same assertions; `Display` and 32-bit `coarse_key` now covered).
-
-### Fixed
-
-- **Native RGBA8/Luma8 normalize lanes + fast exact-hash conversions**: non-RGB8 inputs no longer pay full-frame `to_rgb8()` (per-pixel dispatch) in normalize or exact-hash. RGBA8 resizes U8x4→U8x4 with `mul_div_alpha: false` then strips alpha; Luma8 resizes U8→U8 straight into the gray buffer; exact-hash uses raw triplicate/stride-copy producing byte-identical input. Luma8 `fingerprint_image` at 512px: 13 ms → 1.9 ms. Zero hash-bit drift (parity tests + audit suite green). Part of #50.
 
 ## [0.4.6] - 2026-08-16
 
 ### Added
 
-- **`MultiHashConfig::validate()` / `MultiHashConfig::sanitized()`**: Strict validation rejects NaN/negative weights and out-of-range block thresholds (new `ImgFprintError::InvalidConfig` variant); `sanitized()` repairs such configs for best-effort scoring. `compare_with_config` now sanitizes its input, so a malformed config can never produce a NaN similarity score.
+- **`MultiHashConfig::validate()` / `MultiHashConfig::sanitized()`**: Strict validation rejects NaN/infinite/negative weights and out-of-range block thresholds (new `ImgFprintError::InvalidConfig` variant); `sanitized()` repairs such configs for best-effort scoring. `compare_with_config` now sanitizes its input, so a malformed config can never produce a NaN similarity score.
 
 - **`fingerprint_image_with_preprocess`**: `fingerprint_image` variant accepting a tunable `PreprocessConfig` (context + static API).
 

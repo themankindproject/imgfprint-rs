@@ -69,7 +69,10 @@ pub use local::{LocalProvider, LocalProviderConfig};
 /// # }
 /// ```
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "serde",
+    serde(deny_unknown_fields, try_from = "EmbeddingWire")
+)]
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::derive_partial_eq_without_eq)] // Vec<f32> field prevents Eq (NaN != NaN)
 pub struct Embedding {
@@ -81,6 +84,31 @@ pub struct Embedding {
     /// detection of such mismatches.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     model_id: Option<String>,
+}
+
+/// Serde wire shape for [`Embedding`].
+///
+/// Exists so deserialization runs the same validation as
+/// [`Embedding::new_with_model`]: a derived `Deserialize` would let malformed
+/// input (empty / non-finite / oversized / zero-norm vectors) bypass the
+/// constructor guards. Rejected input surfaces as
+/// [`ImgFprintError::InvalidEmbedding`].
+#[cfg(feature = "serde")]
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EmbeddingWire {
+    vector: Vec<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model_id: Option<String>,
+}
+
+#[cfg(feature = "serde")]
+impl TryFrom<EmbeddingWire> for Embedding {
+    type Error = ImgFprintError;
+
+    fn try_from(wire: EmbeddingWire) -> Result<Self, Self::Error> {
+        Self::new_with_model(wire.vector, wire.model_id)
+    }
 }
 
 impl Embedding {
@@ -673,5 +701,38 @@ mod tests {
         // One without, one with - should still work
         let sim2 = semantic_similarity(&a, &c).unwrap();
         assert!((sim2 - 1.0).abs() < 1e-6);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_embedding_deserialize_rejects_invalid() {
+        // Deserialization runs the same guards as `new_with_model`: empty,
+        // zero-norm, and oversized vectors are rejected, not constructed.
+        for payload in [
+            r#"{"vector":[]}"#.to_string(),
+            r#"{"vector":[0.0,0.0,0.0]}"#.to_string(),
+            format!("{{\"vector\":[{}]}}", vec!["1.0"; 65_537].join(",")),
+        ] {
+            let err = serde_json::from_str::<Embedding>(&payload).unwrap_err();
+            assert!(
+                err.to_string().contains("embedding"),
+                "unexpected error for {payload:.60}: {err}"
+            );
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_embedding_deserialize_roundtrip() {
+        let emb =
+            Embedding::new_with_model(vec![0.1, 0.2, 0.3], Some("model-a".to_string())).unwrap();
+        let json = serde_json::to_string(&emb).unwrap();
+        let back: Embedding = serde_json::from_str(&json).unwrap();
+        assert_eq!(emb, back);
+
+        // model_id omitted on the wire defaults to None.
+        let bare: Embedding = serde_json::from_str(r#"{"vector":[0.5,0.5]}"#).unwrap();
+        assert_eq!(bare.model_id(), None);
+        assert_eq!(bare.as_slice(), &[0.5, 0.5]);
     }
 }

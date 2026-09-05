@@ -190,26 +190,6 @@ impl Preprocessor {
         }
     }
 
-    /// Normalizes image to 256x256 grayscale using SIMD-accelerated resize.
-    ///
-    /// Uses Lanczos3 filtering for high-quality downsampling, then converts
-    /// to grayscale. The SIMD-accelerated resize provides 3-4x speedup
-    /// compared to the image crate's implementation.
-    ///
-    /// Applies EXIF orientation metadata if present.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ImgFprintError::ProcessingError` if resize or conversion fails.
-    #[cfg(test)]
-    pub fn normalize(&mut self, image: &DynamicImage) -> Result<GrayImage, ImgFprintError> {
-        let gray = self.normalize_as_slice(image)?;
-
-        GrayImage::from_raw(NORMALIZED_SIZE, NORMALIZED_SIZE, gray.to_vec()).ok_or_else(|| {
-            ImgFprintError::ProcessingError("failed to create grayscale image".to_string())
-        })
-    }
-
     /// Normalizes image to 256x256 grayscale using **Bilinear** filtering.
     ///
     /// This is a fast-path variant of [`normalize_as_slice`](Self::normalize_as_slice)
@@ -1141,12 +1121,10 @@ mod tests {
         let img = GrayImage::from_pixel(256, 256, Luma([128u8]));
         let dynamic = DynamicImage::ImageLuma8(img);
 
-        let result = preprocessor.normalize(&dynamic);
-        assert!(result.is_ok());
-
-        let gray = result.unwrap();
-        assert_eq!(gray.width(), 256);
-        assert_eq!(gray.height(), 256);
+        let gray = preprocessor.normalize_as_slice(&dynamic).unwrap();
+        // 256x256 output, near-mid gray throughout.
+        assert_eq!(gray.len(), 256 * 256);
+        assert!(gray.iter().all(|&v| (v as f32 / 255.0 - 0.5).abs() < 0.05));
     }
 
     #[test]
@@ -1155,12 +1133,8 @@ mod tests {
         let img = GrayImage::from_pixel(64, 64, Luma([128u8]));
         let dynamic = DynamicImage::ImageLuma8(img);
 
-        let result = preprocessor.normalize(&dynamic);
-        assert!(result.is_ok());
-
-        let gray = result.unwrap();
-        assert_eq!(gray.width(), 256);
-        assert_eq!(gray.height(), 256);
+        let gray = preprocessor.normalize_as_slice(&dynamic).unwrap();
+        assert_eq!(gray.len(), 256 * 256);
     }
 
     #[test]
@@ -1172,11 +1146,13 @@ mod tests {
         let dynamic1 = DynamicImage::ImageLuma8(img1);
         let dynamic2 = DynamicImage::ImageLuma8(img2);
 
-        let result1 = preprocessor.normalize(&dynamic1);
-        let result2 = preprocessor.normalize(&dynamic2);
+        let gray1 = preprocessor.normalize_as_slice(&dynamic1).unwrap().to_vec();
+        let gray2 = preprocessor.normalize_as_slice(&dynamic2).unwrap().to_vec();
 
-        assert!(result1.is_ok());
-        assert!(result2.is_ok());
+        assert_eq!(gray1.len(), 256 * 256);
+        assert_eq!(gray2.len(), 256 * 256);
+        // Distinct inputs reuse the buffer but produce distinct outputs.
+        assert_ne!(gray1, gray2);
     }
 
     #[test]

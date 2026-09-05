@@ -292,10 +292,15 @@ pub fn decode_image_with_config(
             .map_err(|e| ImgFprintError::decode_error(format!("format detection failed: {}", e)))?;
 
         let mut limits = image::Limits::default();
-        // Cap decoded pixel buffer: max_dimension² × 4 bytes (RGBA worst case).
+        // Cap decoded pixel buffer: max_dimension2 × 4 bytes (RGBA worst case).
         // For the default 8192×8192 config this allows up to 256 MiB decode buffer,
         // which is the absolute maximum a single legitimate image can require.
-        limits.max_alloc = Some(config.max_dimension as u64 * config.max_dimension as u64 * 4);
+        // Saturating math: a pathological custom config (max_dimension near
+        // u32::MAX) must yield a huge cap, never a wrapped-small one.
+        let max_alloc = (config.max_dimension as u64)
+            .saturating_mul(config.max_dimension as u64)
+            .saturating_mul(4);
+        limits.max_alloc = Some(max_alloc);
         limits.max_image_width = Some(config.max_dimension);
         limits.max_image_height = Some(config.max_dimension);
         reader.limits(limits);
