@@ -462,10 +462,8 @@ impl ImageFingerprint {
     fn write_payload(&self, out: &mut [u8]) {
         out[..32].copy_from_slice(&self.exact);
         out[32..40].copy_from_slice(&self.global_hash.to_le_bytes());
-        for (dst, hash) in out[40..SINGLE_PAYLOAD_LEN]
-            .chunks_exact_mut(8)
-            .zip(&self.block_hashes)
-        {
+        let (words, _) = out[40..SINGLE_PAYLOAD_LEN].as_chunks_mut::<8>();
+        for (dst, hash) in words.iter_mut().zip(&self.block_hashes) {
             dst.copy_from_slice(&hash.to_le_bytes());
         }
     }
@@ -779,10 +777,10 @@ impl MultiHashFingerprint {
         out[..CODEC_HEADER_LEN].copy_from_slice(&codec_header(CODEC_KIND_MULTI));
         out[CODEC_HEADER_LEN..CODEC_HEADER_LEN + 32].copy_from_slice(&self.exact);
         let layers = &mut out[CODEC_HEADER_LEN + 32..];
-        for (dst, layer) in
-            layers
-                .chunks_exact_mut(SINGLE_PAYLOAD_LEN)
-                .zip([&self.ahash, &self.phash, &self.dhash])
+        let (layer_chunks, _) = layers.as_chunks_mut::<SINGLE_PAYLOAD_LEN>();
+        for (dst, layer) in layer_chunks
+            .iter_mut()
+            .zip([&self.ahash, &self.phash, &self.dhash])
         {
             layer.write_payload(dst);
         }
