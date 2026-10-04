@@ -5,22 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.7] - 2026-10-05
+
+### Added
+
+- **Versioned fingerprint codec**: `ImageFingerprint::to_bytes` / `from_bytes` and `MultiHashFingerprint::to_bytes` / `from_bytes`, with `ENCODED_LEN` constants. The encoding is endian-independent, carries a magic prefix, `FORMAT_VERSION`, and a kind byte, so a stale or foreign blob is rejected as `InvalidFingerprint` instead of being silently mis-compared. Round-trips exactly.
+- **`fingerprint_paths`**: parallel, bounded-memory batch entry point taking paths and returning `(path, Result<…>)` in input order, so one bad file no longer fails the batch.
+- **`ImageFingerprint::compare`** and **`FingerprinterContext::with_config` / `config()` / `set_config()`**: comparisons are now methods on the fingerprint, and a context can carry its own `PreprocessConfig` for every call.
+- **Optional input formats**: `tiff`, `ico`, `pnm`, and `qoi` features (all pure Rust). TGA is intentionally not offered — it has no magic bytes, so the byte-sniffing decode path could never detect it.
+- **`ImgFprintError::InvalidFingerprint`** variant for codec failures.
+- **docs.rs metadata**: `all-features` plus the `docsrs` cfg.
 
 ### Fixed
 
+- **`is_similar` threshold semantics**: an out-of-range or NaN threshold now returns `false` in every build. Previously `debug_assert` panicked in debug while release *clamped* the value, so `is_similar(fp, -5.0)` returned `true` — the opposite of what every doc comment promised.
+- **`semantic_similarity` could exceed 1.0**: accumulating in `f32` drifted enough that ~25% of identical high-dimensional vectors scored above 1.0 (max 1.000000119), breaking `acos` and `<= 1.0` assumptions downstream. Now accumulated in `f64` and clamped to `[-1.0, 1.0]`.
+- **Unbounded read on special files**: `fingerprint_path` trusted the metadata length, so `/dev/zero` (reports size 0, never ends) was read until memory was exhausted. Reads are now capped with `Read::take(max_input_bytes + 1)` regardless of what the metadata claims.
+- **Re-entrancy panic in the static API**: a nested borrow of the thread-local context — reachable when the static API was called from inside rayon workers — panicked with `BorrowMutError`. It now falls back to a fresh context.
+- **`Similarity` ordering was inconsistent with `PartialEq`**: `PartialOrd` compared only the score while `PartialEq` compared every field, violating the std contract. Ordering is now a consistent lexicographic total order.
 - **Embedding deserialization now validates**: derived `Deserialize` let empty / zero-norm / oversized vectors bypass `new_with_model` guards via serde_json and bincode (probed live). Deserialization now goes through a `try_from` wire type running the same validation; malformed input is rejected as `InvalidEmbedding`.
 - **Infinite config weights rejected**: `MultiHashConfig::validate` accepted `inf` (checked only NaN/negative); `sanitized` now maps non-finite weights to `0.0` instead of saturating scores at `1.0`.
 - **Decode alloc-cap overflow hardening**: `max_alloc` computation uses saturating math so a pathological custom `max_dimension` yields a huge cap, never a wrapped-small one.
 
 ### Changed
 
+- **`local-embedding` preprocessing now matches the CLIP reference and is guarded** — *this changes embedding vectors for non-square images; recompute any stored semantic index.* Input is decoded through the crate's guarded decoder (size cap, dimension cap, decompression-bomb limit, EXIF orientation) instead of the previous unguarded `image::load_from_memory`, and is resized with aspect-preserving center-crop (`resize_to_fill` + CatmullRom) instead of stretching to a square with `resize_exact` + Lanczos3. Square images are unaffected. The guarded decode also closes a decompression-bomb hole on the public `LocalProvider::embed(&[u8])` path.
+- **EXIF orientation is now applied for every format that carries it** (JPEG, PNG `eXIf`, WebP, TIFF), not just JPEG, so a rotated photo fingerprints the same whichever container it arrives in. The hand-rolled JPEG/TIFF EXIF parser (~155 lines, including its docs) was replaced by `image`'s `ImageDecoder::orientation()` + `apply_orientation`. The post-rotation dimension re-check is retained.
+- **Decode parses each header once**: the probe-then-decode flow (which parsed every header twice and copied every JPEG input twice) collapsed into a single `into_decoder()` path that checks dimensions before the pixel buffer is allocated and reserves against the cap before allocating.
+- **Per-image hashing is sequential again**: the `parallel` feature no longer fans out *inside* a single image (`rayon::join` over the three hash families plus `par_iter` over 16 PHash blocks). It parallelized ~0.3 ms of work, cost a measured 2.4x CPU per image on single-image calls, and nested inside the batch `par_iter`. Parallelism now happens only across images, where it pays. Hash output is bit-identical.
+- **Removed the `subtle` dependency**: it provided a constant-time comparison of BLAKE3 hashes over *public* content, which buys nothing, and the surrounding docs falsely claimed `no_std` compatibility.
+- **17 redundant API entry points deprecated** (`since = "0.4.7"`, all still functional) in favour of the lean surface above: the `*_with_preprocess` / `fingerprint_with_fast` / `fingerprint_batch_chunked` families, `ImageFingerprinter::compare` / `semantic_embedding` / `semantic_similarity`, `compare_with_threshold`, and `format_version()`. Removal is planned for 0.5.
+- **`Similarity` docs now carry measured guidance**: unrelated images cluster at 0.5–0.65 (two independent 64-bit hashes differ in ~32 bits), not near 0, so the old "below 0.3 = substantially different" guidance was unreachable. Re-encodes, resizes, and small edits score above ~0.85.
 - **Removed test-only `Preprocessor::normalize`**: the `GrayImage`-returning wrapper existed solely for 3 tests; they now assert directly on `normalize_as_slice` (stronger: content + buffer-reuse checks).
 - **Honest visibility in `similarity`**: `compute_similarity_with_threshold`, `compute_similarity_with_weights`, and `compute_block_similarity_with_threshold` demoted to `pub(crate)` (`mod core` is private, so they never reached downstream); test-only `compute_block_similarity` is now `cfg(test)`. Removes the misleading `allow(dead_code)`.
 - **Native RGBA8/Luma8 normalize lanes + fast exact-hash conversions**: non-RGB8 inputs no longer pay full-frame `to_rgb8()` (per-pixel dispatch) in normalize or exact-hash. RGBA8 resizes U8x4→U8x4 with `mul_div_alpha: false` then strips alpha; Luma8 resizes U8→U8 straight into the gray buffer; exact-hash uses raw triplicate/stride-copy producing byte-identical input. Luma8 `fingerprint_image` at 512px: 13 ms → 1.9 ms. Zero hash-bit drift (parity tests + audit suite green). Part of #50.
-- **Internal dedupe, no behavior change (~340 lines removed)**: `extract_*_from_raw` delegate to the `_into_buffer` hot path; single `validate_dimensions` guard in decode; shared `update_exact` / `compute_all_layers` / `run_batch` in the fingerprinter; shared `write_hex` / `check_threshold` in fingerprint types; `LocalProviderConfig::default` delegates to `clip_vit_base_patch32`. Test-only PHash entry points are now `cfg(test)` so the release binary no longer carries them.
-- **Local ONNX preprocess loop**: CHW fill reads the packed RGB buffer directly instead of per-pixel `get_pixel`, with mean/std hoisted out of the inner loop. Same values, same LOC.
+- **Internal dedupe (~340 lines removed)**: `extract_*_from_raw` delegate to the `_into_buffer` hot path; single `validate_dimensions` guard in decode; shared `update_exact` / `compute_all_layers` / `run_batch` in the fingerprinter; shared `write_hex` in the fingerprint types; `LocalProviderConfig::default` delegates to `clip_vit_base_patch32`. Test-only PHash entry points are now `cfg(test)` so the release binary no longer carries them.
 - **Table-driven unit tests**: trivial hash/similarity/coarse-key tests collapsed into tables (37 redundant test fns removed, same assertions; `Display` and 32-bit `coarse_key` now covered).
+- **Packaging**: pruned `exclude` entries for files that do not exist, and `[profile.dev] debug = "line-tables-only"` to cut debug-artifact bloat.
 
 ## [0.4.6] - 2026-08-16
 
@@ -508,7 +529,8 @@ Per-algorithm DCT/grid/hash-bit reconfiguration (different `dct_size`, `block_gr
 - Semantic embeddings via external providers
 - Local ONNX inference (optional feature)
 
-[Unreleased]: https://github.com/themankindproject/imgfprint-rs/compare/v0.4.6...HEAD
+[Unreleased]: https://github.com/themankindproject/imgfprint-rs/compare/v0.4.7...HEAD
+[0.4.7]: https://github.com/themankindproject/imgfprint-rs/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/themankindproject/imgfprint-rs/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/themankindproject/imgfprint-rs/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/themankindproject/imgfprint-rs/compare/v0.4.3...v0.4.4

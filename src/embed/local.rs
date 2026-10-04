@@ -28,11 +28,44 @@
 
 use crate::embed::{Embedding, EmbeddingProvider};
 use crate::error::ImgFprintError;
+use crate::imgproc::decode::{decode_image_with_config, PreprocessConfig};
+use image::DynamicImage;
 use std::path::Path;
 use tract_onnx::prelude::*;
 
 type RunnableOnnxModel =
     RunnableModel<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
+
+/// CHW model input following the CLIP reference preprocessing: scale the
+/// shorter side to `input_size` (bicubic), center-crop to a square, map to
+/// `[0, 1]`, then normalize each channel with the configured mean/std.
+///
+/// Preserving the aspect ratio matters: stretching a non-square image to a
+/// square (the previous behavior) shifts embeddings away from what the model
+/// was trained on.
+fn clip_input(image: &DynamicImage, config: &LocalProviderConfig) -> Vec<f32> {
+    #[allow(clippy::cast_possible_truncation)] // model input sizes are tiny
+    let size = config.input_size as u32;
+    let rgb = image
+        .resize_to_fill(size, size, image::imageops::FilterType::CatmullRom)
+        .to_rgb8();
+    let raw = rgb.as_raw();
+    let pixels = config.input_size * config.input_size;
+    debug_assert_eq!(raw.len(), 3 * pixels);
+
+    let mut data = Vec::with_capacity(3 * pixels);
+    for c in 0..3 {
+        let mean = config.normalize_mean[c];
+        let std = config.normalize_std[c];
+        data.extend(
+            raw[c..]
+                .iter()
+                .step_by(3)
+                .map(|&v| (f32::from(v) / 255.0 - mean) / std),
+        );
+    }
+    data
+}
 
 /// Configuration for the local embedding provider.
 #[derive(Debug, Clone)]
@@ -234,54 +267,28 @@ impl LocalProvider {
         &self.config
     }
 
-    /// Preprocesses an image for the model.
+    /// Decodes `image_bytes` and builds the `[1, 3, size, size]` input tensor.
     ///
-    /// This function:
-    /// 1. Decodes the image
-    /// 2. Resizes to the configured input size
-    /// 3. Converts to RGB float tensor
-    /// 4. Applies normalization
+    /// Decoding goes through the crate's guarded decoder (size and
+    /// dimension caps, decompression-bomb limit, EXIF orientation), so an
+    /// untrusted upload cannot exhaust memory here either.
     fn preprocess_image(&self, image_bytes: &[u8]) -> Result<Tensor, ImgFprintError> {
-        // Decode the image
-        let img = image::load_from_memory(image_bytes)
-            .map_err(|e| ImgFprintError::DecodeError(format!("Failed to decode image: {}", e)))?;
-
-        // Resize to input size
-        let resized = img.resize_exact(
-            self.config.input_size as u32,
-            self.config.input_size as u32,
-            image::imageops::FilterType::Lanczos3,
-        );
-
-        // Convert to RGB
-        let rgb_img = resized.to_rgb8();
-
-        // Create tensor with shape [1, 3, H, W] (batch, channels, height, width)
         let size = self.config.input_size;
-        let raw = rgb_img.as_raw();
-        debug_assert_eq!(raw.len(), 3 * size * size);
-        let mut tensor_data: Vec<f32> = Vec::with_capacity(3 * size * size);
-
-        // Fill in CHW format (channels first), reading the packed RGB buffer
-        // directly instead of per-pixel `get_pixel` (which re-validates
-        // bounds on every access).
-        for c in 0..3 {
-            let mean = self.config.normalize_mean[c];
-            let std = self.config.normalize_std[c];
-            let mut src = c;
-            for _ in 0..size * size {
-                // Normalize
-                tensor_data.push((raw[src] as f32 / 255.0 - mean) / std);
-                src += 3;
-            }
+        if size == 0 {
+            return Err(ImgFprintError::invalid_config(
+                "LocalProviderConfig::input_size must be > 0",
+            ));
         }
+        let guards = PreprocessConfig {
+            // Any size is fine: the image is resized to `input_size` anyway.
+            min_dimension: 1,
+            ..PreprocessConfig::default()
+        };
+        let img = decode_image_with_config(image_bytes, &guards)?;
+        let data = clip_input(&img, &self.config);
 
-        // Create tensor
-        let tensor = Tensor::from_shape(&[1, 3, size, size], &tensor_data).map_err(|e| {
-            ImgFprintError::ProcessingError(format!("Failed to create tensor: {}", e))
-        })?;
-
-        Ok(tensor)
+        Tensor::from_shape(&[1, 3, size, size], &data)
+            .map_err(|e| ImgFprintError::ProcessingError(format!("Failed to create tensor: {}", e)))
     }
 
     /// L2 normalizes a vector.
@@ -363,5 +370,49 @@ mod tests {
         let mut vec = vec![0.0, 0.0, 0.0];
         LocalProvider::l2_normalize(&mut vec);
         assert_eq!(vec, vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn clip_input_is_chw_normalized_and_center_cropped() {
+        // 300x100: left third red, middle third green, right third blue.
+        // Shorter side -> 224 gives 672x224; the centered 224x224 crop is
+        // exactly the green third, so every pixel must normalize to green.
+        let img = image::RgbImage::from_fn(300, 100, |x, _| match x / 100 {
+            0 => image::Rgb([255, 0, 0]),
+            1 => image::Rgb([0, 255, 0]),
+            _ => image::Rgb([0, 0, 255]),
+        });
+        let config = LocalProviderConfig::default();
+        let data = clip_input(&DynamicImage::ImageRgb8(img), &config);
+        let plane = config.input_size * config.input_size;
+        assert_eq!(data.len(), 3 * plane);
+
+        let expect = |c: usize, v: f32| (v - config.normalize_mean[c]) / config.normalize_std[c];
+        // Interior pixels only: the bicubic kernel blends ~2px at the edges.
+        let side = config.input_size;
+        for y in 8..side - 8 {
+            for x in 8..side - 8 {
+                let i = y * side + x;
+                assert!((data[i] - expect(0, 0.0)).abs() < 0.02, "R at ({x},{y})");
+                assert!(
+                    (data[plane + i] - expect(1, 1.0)).abs() < 0.02,
+                    "G at ({x},{y})"
+                );
+                assert!(
+                    (data[2 * plane + i] - expect(2, 0.0)).abs() < 0.02,
+                    "B at ({x},{y})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn clip_input_handles_tiny_and_portrait_images() {
+        let config = LocalProviderConfig::default();
+        let plane = config.input_size * config.input_size;
+        for (w, h) in [(1, 1), (3, 500), (500, 3), (224, 224)] {
+            let img = DynamicImage::ImageRgb8(image::RgbImage::new(w, h));
+            assert_eq!(clip_input(&img, &config).len(), 3 * plane, "{w}x{h}");
+        }
     }
 }

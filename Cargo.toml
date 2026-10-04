@@ -1,6 +1,6 @@
 [package]
 name = "imgfprint"
-version = "0.4.6"
+version = "0.4.7"
 edition = "2021"
 description = "High-performance, deterministic image fingerprinting library"
 license = "MIT"
@@ -10,23 +10,23 @@ documentation = "https://docs.rs/imgfprint"
 rust-version = "1.88"
 repository = "https://github.com/themankindproject/imgfprint-rs"
 readme = "README.md"
-exclude      = [
+exclude = [
     ".github/**",
     ".claude/**",
     ".codex/**",
     "AGENTS.md",
+    "CLAUDE.md",
+    "CONTRIBUTING.md",
+    ".mcp.json",
     "benches/**",
     "examples/**",
     "tests/**",
     "fuzz/**",
-    "future.md",
-    "image.md",
-    "logo-preview.html",
-    "CONTRIBUTING.md",
-    "CLAUDE.md",
-    ".mcp.json",
-    "*.sh",
 ]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
@@ -37,7 +37,6 @@ serde = { version = "1.0", features = ["derive"], optional = true }
 rayon = { version = "1.10", optional = true }
 tract-onnx = { version = "0.22.1", optional = true }
 tracing = { version = "0.1", optional = true }
-subtle = "2.6"
 bytemuck = { version = "1.18", features = ["derive"] }
 
 [features]
@@ -46,10 +45,18 @@ serde = ["dep:serde"]
 parallel = ["dep:rayon"]
 local-embedding = ["dep:tract-onnx"]
 tracing = ["dep:tracing"]
-# Reserved for future watermarking support. The feature existed with four
-# dependencies (rand_chacha, rand_core, hmac, sha2) but zero implementation;
-# the dead dependencies were removed. The feature name is kept so existing
-# `--features watermark` builds keep compiling.
+# Extra input formats (PNG, JPEG, GIF, WebP, and BMP are always on).
+# All pure Rust; each only enables the matching `image` decoder.
+#
+# TGA is deliberately absent: it has no magic bytes, so a byte-sniffing API
+# (every entry point here) can never detect it. Enabling `image/tga` would
+# compile but never match, which is worse than not offering it.
+tiff = ["image/tiff"]
+ico = ["image/ico"]
+pnm = ["image/pnm"]
+qoi = ["image/qoi"]
+# Deprecated no-op, kept only so existing `--features watermark` builds keep
+# compiling; it will be removed in 0.5.
 watermark = []
 
 [dev-dependencies]
@@ -82,3 +89,6 @@ panic = "abort"
 
 [profile.dev]
 opt-level = 2
+# Slimmer debug artifacts: line tables keep usable backtraces while
+# cutting debuginfo bloat in target/debug (see RUST_BUILD_CACHE policy).
+debug = "line-tables-only"

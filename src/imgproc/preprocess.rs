@@ -186,7 +186,9 @@ impl Preprocessor {
             resizer,
             dst_buffer: Vec::with_capacity((NORMALIZED_SIZE * NORMALIZED_SIZE * 3) as usize),
             gray_buffer: Vec::with_capacity((NORMALIZED_SIZE * NORMALIZED_SIZE) as usize),
-            rgba_buffer: Vec::with_capacity((NORMALIZED_SIZE * NORMALIZED_SIZE * 4) as usize),
+            // Only RGBA8 inputs use this 256 KiB scratch; it is reserved on
+            // first use and then kept, so other workloads never pay for it.
+            rgba_buffer: Vec::new(),
         }
     }
 
@@ -743,8 +745,7 @@ pub(crate) fn extract_blocks_into_buffer(pixels: &[u8], buffer: &mut [[f32; 64 *
 }
 
 /// Extracts center 32x32 region from a normalized 256x256 grayscale byte buffer.
-#[inline]
-#[allow(dead_code)] // Kept for backward compat; used in tests via extract_global_region()
+#[cfg(test)]
 pub(crate) fn extract_global_region_from_raw(
     pixels: &[u8],
 ) -> [f32; (PHASH_SIZE * PHASH_SIZE) as usize] {
@@ -764,8 +765,7 @@ pub(crate) fn extract_blocks(image: &GrayImage) -> [[f32; (BLOCK_SIZE * BLOCK_SI
 }
 
 /// Extracts 4x4 grid of 64x64 blocks from a normalized 256x256 grayscale byte buffer.
-#[inline]
-#[allow(dead_code)] // Kept for backward compat; used in tests via extract_blocks()
+#[cfg(test)]
 pub(crate) fn extract_blocks_from_raw(
     pixels: &[u8],
 ) -> [[f32; (BLOCK_SIZE * BLOCK_SIZE) as usize]; 16] {

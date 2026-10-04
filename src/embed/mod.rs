@@ -5,21 +5,24 @@
 //!
 //! ## Example
 //!
-//! ```rust,ignore
-//! use imgfprint::{ImageFingerprinter, Embedding, EmbeddingProvider};
+//! ```rust
+//! use imgfprint::{semantic_similarity, Embedding, EmbeddingProvider, ImgFprintError};
 //!
-//! // Define your provider implementation
+//! /// Bring your own model or API (CLIP, a hosted embedding service, ...).
 //! struct MyClipProvider;
 //!
 //! impl EmbeddingProvider for MyClipProvider {
-//!     fn embed(&self, image: &[u8]) -> Result<Embedding, ImgFprintError> {
-//!         // Call external API or local model
-//!         // Return the embedding vector
+//!     fn embed(&self, _image: &[u8]) -> Result<Embedding, ImgFprintError> {
+//!         // Call your model here; a fixed vector keeps the example runnable.
+//!         Embedding::new_with_model(vec![0.1, 0.7, 0.2], Some("my-clip".into()))
 //!     }
 //! }
 //!
 //! let provider = MyClipProvider;
-//! let embedding = ImageFingerprinter::semantic_embedding(&provider, &image_bytes)?;
+//! let a = provider.embed(b"image bytes")?;
+//! let b = provider.embed(b"other image bytes")?;
+//! assert!(semantic_similarity(&a, &b)? > 0.99);
+//! # Ok::<(), ImgFprintError>(())
 //! ```
 
 use crate::error::ImgFprintError;
@@ -392,16 +395,17 @@ pub fn semantic_similarity(a: &Embedding, b: &Embedding) -> Result<f32, ImgFprin
         });
     }
 
-    // Note: Embedding::new() already validates finiteness, so no need to re-check here.
-    // Compute dot product and norms in a single pass for better cache locality
-    let mut dot_product: f32 = 0.0;
-    let mut norm_first_sq: f32 = 0.0;
-    let mut norm_second_sq: f32 = 0.0;
+    // Embedding::new() already validates finiteness. Accumulate in f64: an
+    // f32 sum over hundreds of terms drifts enough that identical vectors
+    // scored above 1.0 about a quarter of the time (breaking `acos` and
+    // `<= 1.0` checks downstream); f64 plus the final clamp keeps the
+    // result inside the documented [-1.0, 1.0].
+    let mut dot_product = 0.0f64;
+    let mut norm_first_sq = 0.0f64;
+    let mut norm_second_sq = 0.0f64;
 
-    for i in 0..a_vec.len() {
-        let a_i = a_vec[i];
-        let b_i = b_vec[i];
-
+    for (&a_i, &b_i) in a_vec.iter().zip(b_vec) {
+        let (a_i, b_i) = (f64::from(a_i), f64::from(b_i));
         dot_product += a_i * b_i;
         norm_first_sq += a_i * a_i;
         norm_second_sq += b_i * b_i;
@@ -417,7 +421,8 @@ pub fn semantic_similarity(a: &Embedding, b: &Embedding) -> Result<f32, ImgFprin
         ));
     }
 
-    Ok(dot_product / (norm_a * norm_b))
+    #[allow(clippy::cast_possible_truncation)] // clamped to [-1, 1] first
+    Ok((dot_product / (norm_a * norm_b)).clamp(-1.0, 1.0) as f32)
 }
 
 #[cfg(test)]
@@ -487,6 +492,34 @@ mod tests {
             "Identical vectors should have similarity 1.0, got {}",
             sim
         );
+    }
+
+    #[test]
+    fn test_cosine_similarity_never_leaves_unit_interval() {
+        // Regression: f32 accumulation scored ~25% of identical high-dim
+        // vectors above 1.0 (max 1.000000119).
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            ((state >> 40) as f32 / (1u64 << 24) as f32) * 2.0 - 1.0
+        };
+        for dim in [3usize, 512, 768, 4096] {
+            for _ in 0..50 {
+                let v: Vec<f32> = (0..dim).map(|_| next()).collect();
+                let neg: Vec<f32> = v.iter().map(|x| -x).collect();
+                let a = emb(v.clone());
+                assert!(
+                    semantic_similarity(&a, &emb(v)).unwrap() <= 1.0,
+                    "dim {dim}"
+                );
+                assert!(
+                    semantic_similarity(&a, &emb(neg)).unwrap() >= -1.0,
+                    "dim {dim}"
+                );
+            }
+        }
     }
 
     #[test]

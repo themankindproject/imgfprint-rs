@@ -79,7 +79,7 @@ fn benchmark_compare_single(c: &mut Criterion) {
 
     c.bench_function("compare_single", |b| {
         b.iter(|| {
-            let _ = ImageFingerprinter::compare(black_box(&fp1), black_box(&fp2));
+            let _ = black_box(&fp1).compare(black_box(&fp2));
         })
     });
 }

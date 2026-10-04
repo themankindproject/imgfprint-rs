@@ -42,7 +42,7 @@ This crate follows [Semantic Versioning](https://semver.org/) (SemVer).
 
 ### MSRV (Minimum Supported Rust Version)
 
-- Current MSRV: **1.70**
+- Current MSRV: **1.88**
 - MSRV may be bumped in minor versions with advance notice
 - New features that require newer Rust will be feature-gated
 

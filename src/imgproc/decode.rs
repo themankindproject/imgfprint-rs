@@ -1,7 +1,7 @@
-//! Image decoding with dimension validation and EXIF orientation support.
+//! Image decoding with size/dimension guards and EXIF orientation support.
 
 use crate::error::ImgFprintError;
-use image::{DynamicImage, GenericImageView};
+use image::{DynamicImage, ImageDecoder, ImageError};
 use std::io::Cursor;
 
 /// Default maximum image edge length, in pixels. Beyond this, decode is rejected.
@@ -19,6 +19,9 @@ pub const DEFAULT_MAX_INPUT_BYTES: usize = 50 * 1024 * 1024;
 /// All defaults reproduce the historic hardcoded limits. Tighten them on
 /// untrusted input paths; widen `max_input_bytes` and `max_dimension` only
 /// for trusted batch jobs where OOM is acceptable risk.
+///
+/// Apply a config to every call by building a context with
+/// [`FingerprinterContext::with_config`](crate::FingerprinterContext::with_config).
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,178 +46,19 @@ impl Default for PreprocessConfig {
     }
 }
 
-/// Reads EXIF orientation from JPEG image bytes.
-/// Returns orientation value (1-8) or 1 if no EXIF data found.
+/// Decodes image bytes with the default [`PreprocessConfig`].
 ///
-/// Parses the JPEG APP1 (EXIF) marker directly without an external library.
-/// Only looks for the Orientation tag (0x0112) in IFD0.
-fn read_exif_orientation(image_bytes: &[u8]) -> u32 {
-    // JPEG must start with SOI (0xFFD8)
-    if image_bytes.len() < 4 || image_bytes[0] != 0xFF || image_bytes[1] != 0xD8 {
-        return 1;
-    }
-
-    // Scan JPEG markers for APP1 (0xFFE1) containing EXIF
-    let mut pos = 2;
-    while pos + 4 <= image_bytes.len() {
-        if image_bytes[pos] != 0xFF {
-            return 1; // Invalid marker
-        }
-        let marker = image_bytes[pos + 1];
-
-        // Skip padding 0xFF bytes
-        if marker == 0xFF {
-            pos += 1;
-            continue;
-        }
-
-        // SOS (Start of Scan) — stop searching
-        if marker == 0xDA {
-            return 1;
-        }
-
-        // Marker segment length (big-endian, includes length bytes themselves)
-        if pos + 4 > image_bytes.len() {
-            return 1;
-        }
-        let seg_len = ((image_bytes[pos + 2] as usize) << 8) | (image_bytes[pos + 3] as usize);
-        if seg_len < 2 {
-            return 1;
-        }
-
-        // APP1 marker with EXIF header?
-        if marker == 0xE1 {
-            let seg_start = pos + 4; // after marker + length
-            let seg_end = pos + 2 + seg_len;
-            if seg_end > image_bytes.len() {
-                return 1;
-            }
-            let seg_data = &image_bytes[seg_start..seg_end];
-
-            // Check for "Exif\0\0" header (6 bytes)
-            if seg_data.len() >= 6 && &seg_data[0..6] == b"Exif\0\0" {
-                if let Some(orient) = parse_tiff_orientation(&seg_data[6..]) {
-                    return orient;
-                }
-            }
-        }
-
-        // Advance past this marker segment
-        pos += 2 + seg_len;
-    }
-
-    1
-}
-
-/// Parses TIFF/IFD0 data to extract the Orientation tag (0x0112).
-fn parse_tiff_orientation(tiff: &[u8]) -> Option<u32> {
-    if tiff.len() < 8 {
-        return None;
-    }
-
-    // Byte order: "II" (little-endian) or "MM" (big-endian)
-    let le = match (tiff[0], tiff[1]) {
-        (b'I', b'I') => true,
-        (b'M', b'M') => false,
-        _ => return None,
-    };
-
-    // Validate TIFF magic number (42)
-    let magic = read_u16(tiff, 2, le);
-    if magic != 42 {
-        return None;
-    }
-
-    // Offset to IFD0
-    let ifd_offset = read_u32(tiff, 4, le) as usize;
-    if ifd_offset + 2 > tiff.len() {
-        return None;
-    }
-
-    // Number of IFD entries
-    let entry_count = read_u16(tiff, ifd_offset, le) as usize;
-    let entries_start = ifd_offset + 2;
-
-    // Each IFD entry is 12 bytes: tag(2) + type(2) + count(4) + value/offset(4)
-    for i in 0..entry_count {
-        let entry_pos = entries_start + i * 12;
-        if entry_pos + 12 > tiff.len() {
-            return None;
-        }
-
-        let tag = read_u16(tiff, entry_pos, le);
-        if tag == 0x0112 {
-            // Orientation tag found
-            // Type should be SHORT (3), count should be 1
-            let value = read_u16(tiff, entry_pos + 8, le) as u32;
-            if (1..=8).contains(&value) {
-                return Some(value);
-            }
-            return None;
-        }
-    }
-
-    None
-}
-
-#[inline]
-fn read_u16(data: &[u8], offset: usize, le: bool) -> u16 {
-    if le {
-        u16::from_le_bytes([data[offset], data[offset + 1]])
-    } else {
-        u16::from_be_bytes([data[offset], data[offset + 1]])
-    }
-}
-
-#[inline]
-fn read_u32(data: &[u8], offset: usize, le: bool) -> u32 {
-    if le {
-        u32::from_le_bytes([
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3],
-        ])
-    } else {
-        u32::from_be_bytes([
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3],
-        ])
-    }
-}
-
-/// Applies EXIF orientation transformation to an image.
-fn apply_orientation_transform(image: DynamicImage, orientation: u32) -> DynamicImage {
-    match orientation {
-        2 => image.fliph(),
-        3 => image.rotate180(),
-        4 => image.flipv(),
-        5 => image.rotate90().fliph(),
-        6 => image.rotate90(),
-        7 => image.rotate270().fliph(),
-        8 => image.rotate270(),
-        _ => image, // 1 or invalid - no transformation
-    }
-}
-
-/// Decodes image bytes, validates dimensions, and applies EXIF orientation.
+/// Equivalent to [`decode_image_with_config`] with
+/// `&PreprocessConfig::default()`.
 ///
-/// Uses the default [`PreprocessConfig`]; equivalent to
-/// [`decode_image_with_config`] called with `&PreprocessConfig::default()`.
+/// # Errors
 ///
-/// - Validates input size before processing to prevent OOM attacks.
-/// - Maximum allowed dimension is 8192x8192 pixels (checked both before and after EXIF rotation).
-/// - Minimum required dimension is 32x32 pixels for fingerprinting.
+/// See [`decode_image_with_config`].
 pub fn decode_image(image_bytes: &[u8]) -> Result<DynamicImage, ImgFprintError> {
     decode_image_with_config(image_bytes, &PreprocessConfig::default())
 }
 
 /// Rejects an inconsistent config where `min_dimension > max_dimension`.
-///
-/// Shared by [`validate_dimensions`] and the byte-decode path so the sanity
-/// check lives in exactly one place.
 fn check_config_sanity(config: &PreprocessConfig) -> Result<(), ImgFprintError> {
     if config.min_dimension > config.max_dimension {
         return Err(ImgFprintError::invalid_image(format!(
@@ -225,7 +69,7 @@ fn check_config_sanity(config: &PreprocessConfig) -> Result<(), ImgFprintError> 
     Ok(())
 }
 
-/// Validates decoded image dimensions against a [`PreprocessConfig`].
+/// Validates image dimensions against a [`PreprocessConfig`].
 ///
 /// Shared by the byte-decode path and the already-decoded
 /// [`FingerprinterContext::fingerprint_image`](crate::FingerprinterContext::fingerprint_image)
@@ -257,7 +101,41 @@ pub(crate) fn validate_dimensions(
     Ok(())
 }
 
-/// Decodes image bytes with a tunable [`PreprocessConfig`].
+/// Maps `image` crate errors onto [`ImgFprintError`] variants.
+fn map_image_error(e: ImageError) -> ImgFprintError {
+    match e {
+        ImageError::Unsupported(format) => ImgFprintError::UnsupportedFormat(format!("{format:?}")),
+        ImageError::Decoding(err) => ImgFprintError::decode_error(err.to_string()),
+        ImageError::IoError(io_err) => ImgFprintError::decode_error(format!("I/O error: {io_err}")),
+        ImageError::Parameter(param_err) => {
+            ImgFprintError::invalid_image(format!("parameter error: {param_err}"))
+        }
+        ImageError::Limits(limits_err) => {
+            ImgFprintError::invalid_image(format!("limits exceeded: {limits_err}"))
+        }
+        other => ImgFprintError::ProcessingError(format!("image processing error: {other}")),
+    }
+}
+
+/// Decodes image bytes, enforcing `config`, and applies EXIF orientation.
+///
+/// - The byte-size guard runs before any parsing.
+/// - The dimension guards run on the header, before the pixel buffer is
+///   allocated; the buffer is additionally capped at
+///   `max_dimension² × 4` bytes (decompression-bomb guard).
+/// - EXIF orientation is applied for every format that carries it (JPEG,
+///   PNG `eXIf`, WebP, TIFF), so a rotated photo fingerprints the same
+///   whichever container it arrives in. The dimension guards are re-checked
+///   after rotation.
+/// - Animated formats yield their first frame.
+///
+/// # Errors
+///
+/// - [`ImgFprintError::InvalidImage`]: empty input, input over
+///   `max_input_bytes`, an edge over `max_dimension`, or allocation limit hit.
+/// - [`ImgFprintError::ImageTooSmall`]: an edge under `min_dimension`.
+/// - [`ImgFprintError::UnsupportedFormat`]: unknown or disabled format.
+/// - [`ImgFprintError::DecodeError`]: corrupt or truncated data.
 pub fn decode_image_with_config(
     image_bytes: &[u8],
     config: &PreprocessConfig,
@@ -276,64 +154,50 @@ pub fn decode_image_with_config(
         )));
     }
 
-    // Early dimension check without full decode to reject oversized images cheaply
-    if let Ok(reader) = image::ImageReader::new(Cursor::new(image_bytes)).with_guessed_format() {
-        if let Ok((w, h)) = reader.into_dimensions() {
-            validate_dimensions(w, h, config)?;
-        }
-    }
+    // Cap decoded memory at max_dimension² × 4 bytes (RGBA8 worst case;
+    // 256 MiB at the 8192 default). Saturating math: a pathological custom
+    // config must yield a huge cap, never a wrapped one. The reader gets the
+    // cap before the decoder exists because PNG sizes its internal buffers
+    // from it at construction.
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(
+        u64::from(config.max_dimension)
+            .saturating_mul(u64::from(config.max_dimension))
+            .saturating_mul(4),
+    );
 
-    // Use a reader with explicit decode limits to prevent decompression bombs.
-    // A malicious PNG/GIF within the 50 MiB input cap could otherwise decompress
-    // into gigabytes of RAM during decode.
-    let image = {
-        let mut reader = image::ImageReader::new(Cursor::new(image_bytes))
-            .with_guessed_format()
-            .map_err(|e| ImgFprintError::decode_error(format!("format detection failed: {}", e)))?;
+    // One decoder for header, metadata, and pixels: the previous
+    // probe-then-decode flow parsed every header twice (and copied every
+    // JPEG input twice, since the JPEG decoder buffers its whole input).
+    let mut reader = image::ImageReader::new(Cursor::new(image_bytes))
+        .with_guessed_format()
+        .map_err(|e| ImgFprintError::decode_error(format!("format detection failed: {e}")))?;
+    reader.limits(limits.clone());
+    let mut decoder = reader.into_decoder().map_err(map_image_error)?;
 
-        let mut limits = image::Limits::default();
-        // Cap decoded pixel buffer: max_dimension2 × 4 bytes (RGBA worst case).
-        // For the default 8192×8192 config this allows up to 256 MiB decode buffer,
-        // which is the absolute maximum a single legitimate image can require.
-        // Saturating math: a pathological custom config (max_dimension near
-        // u32::MAX) must yield a huge cap, never a wrapped-small one.
-        let max_alloc = (config.max_dimension as u64)
-            .saturating_mul(config.max_dimension as u64)
-            .saturating_mul(4);
-        limits.max_alloc = Some(max_alloc);
-        limits.max_image_width = Some(config.max_dimension);
-        limits.max_image_height = Some(config.max_dimension);
-        reader.limits(limits);
-
-        reader.decode()
-    }
-    .map_err(|e| match e {
-        image::ImageError::Unsupported(format) => {
-            ImgFprintError::UnsupportedFormat(format!("{:?}", format))
-        }
-        image::ImageError::Decoding(err) => ImgFprintError::decode_error(err.to_string()),
-        image::ImageError::IoError(io_err) => {
-            ImgFprintError::decode_error(format!("I/O error: {}", io_err))
-        }
-        image::ImageError::Parameter(param_err) => {
-            ImgFprintError::invalid_image(format!("parameter error: {}", param_err))
-        }
-        image::ImageError::Limits(limits_err) => {
-            ImgFprintError::invalid_image(format!("limits exceeded: {}", limits_err))
-        }
-        other => ImgFprintError::ProcessingError(format!("image processing error: {}", other)),
-    })?;
-
-    let (width, height) = image.dimensions();
+    let (width, height) = decoder.dimensions();
     validate_dimensions(width, height, config)?;
 
-    let orientation = read_exif_orientation(image_bytes);
-    let oriented_image = apply_orientation_transform(image, orientation);
+    // Reserve the output buffer against the cap before allocating it (as
+    // `ImageReader::decode` does); the decoder gets the remaining budget.
+    limits.max_image_width = Some(config.max_dimension);
+    limits.max_image_height = Some(config.max_dimension);
+    limits
+        .reserve(decoder.total_bytes())
+        .map_err(map_image_error)?;
+    decoder.set_limits(limits).map_err(map_image_error)?;
 
-    let (final_w, final_h) = oriented_image.dimensions();
+    // Unreadable or malformed metadata must not fail an otherwise good image.
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+
+    let mut image = DynamicImage::from_decoder(decoder).map_err(map_image_error)?;
+    image.apply_orientation(orientation);
+
+    let (final_w, final_h) = (image.width(), image.height());
     validate_dimensions(final_w, final_h, config).map_err(|e| match e {
-        // Rebuild the post-orientation messages verbatim so callers see the
-        // rotated size; the inner message already names the pre-rotation dims.
+        // Name the rotated size; the inner message names the stored size.
         ImgFprintError::InvalidImage(_) => ImgFprintError::invalid_image(format!(
             "post-orientation dimensions {}x{} exceed limit {}x{}",
             final_w, final_h, config.max_dimension, config.max_dimension
@@ -345,7 +209,7 @@ pub fn decode_image_with_config(
         other => other,
     })?;
 
-    Ok(oriented_image)
+    Ok(image)
 }
 
 #[cfg(test)]

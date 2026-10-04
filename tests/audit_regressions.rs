@@ -81,12 +81,13 @@ fn single_mode_matches_multi_mode_all_algorithms() {
 }
 
 #[test]
+#[allow(deprecated)] // covers the deprecated fast path until removal
 fn fast_mode_still_produces_valid_fingerprints() {
     let png = make_png(200, 99);
     for alg in [HashAlgorithm::AHash, HashAlgorithm::DHash] {
         let fp = ImageFingerprinter::fingerprint_with_fast(&png, alg).unwrap();
         // Self-comparison must be perfect.
-        let sim = ImageFingerprinter::compare(&fp, &fp);
+        let sim = fp.compare(&fp);
         assert_eq!(sim.score, 1.0);
     }
     // PHash fast path falls back to Lanczos3, so it must match the standard path.
@@ -238,6 +239,7 @@ fn compare_with_config_never_produces_nan_score() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[allow(deprecated)] // covers the deprecated shim until removal
 fn batch_chunked_matches_batch_and_preserves_order() {
     let imgs: Vec<(usize, Vec<u8>)> = (0..10).map(|i| (i, make_png(80, 200 + i as u64))).collect();
 

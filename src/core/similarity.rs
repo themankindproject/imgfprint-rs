@@ -1,19 +1,6 @@
 //! Similarity computation for perceptual fingerprints.
-//!
-//! This module is `no_std`-compatible: all types and functions use only `core`
-//! primitives and the `subtle` crate (also `no_std`). Consumers that only need
-//! to *compare* pre-computed fingerprints (e.g., on embedded targets) can depend
-//! on this module without pulling in `std`, `image`, or any I/O.
 
 use crate::core::fingerprint::{ImageFingerprint, DEFAULT_BLOCK_DISTANCE_THRESHOLD};
-use subtle::ConstantTimeEq;
-
-// NOTE: We use `subtle::ConstantTimeEq` for BLAKE3 hash comparison to prevent
-// timing side-channels that could leak information about which bytes of two
-// fingerprints match. While BLAKE3 hashes are derived from public image content,
-// constant-time comparison is a defense-in-depth measure for deployments where
-// fingerprint equality checks are exposed over a network boundary (e.g., API
-// endpoints that return "duplicate" vs "not duplicate").
 
 /// Default maximum Hamming distance for a block to be considered a valid match.
 ///
@@ -49,22 +36,26 @@ pub fn hamming_distance(a: u64, b: u64) -> u32 {
 
 /// Similarity score between two image fingerprints.
 ///
-/// The score combines exact hashing with perceptual hashing to provide
-/// a robust measure of visual similarity.
+/// Ordering (`<`, `>`, sorting) ranks by "more similar is greater": first by
+/// `score`, then exact matches above perceptual ones, then smaller
+/// `perceptual_distance` above larger. It agrees with `==`.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[allow(clippy::derive_partial_eq_without_eq)] // f32 field prevents Eq (NaN != NaN)
 pub struct Similarity {
-    /// Similarity score from 0.0 (completely different) to 1.0 (identical).
+    /// Similarity score from 0.0 to 1.0 (identical).
     ///
-    /// Values above 0.7 generally indicate the same image with minor modifications.
-    /// Values below 0.3 indicate substantially different images.
+    /// Two independent 64-bit hashes differ in ~32 bits, so unrelated images
+    /// typically score 0.5–0.65 rather than near 0 — there is no "close to
+    /// zero" band. Measured on real photos, re-encodes, resizes, and small
+    /// edits score above ~0.85, so that is a reasonable starting threshold.
     pub score: f32,
 
-    /// True if the images have identical BLAKE3 hashes (exact byte match).
+    /// True if the images have identical BLAKE3 exact hashes.
     pub exact_match: bool,
 
-    /// Hamming distance between global perceptual hashes (0-64).
+    /// Hamming distance between global perceptual hashes (0-64); for
+    /// multi-hash comparisons, the weight-averaged distance across algorithms.
     ///
     /// Lower values indicate higher similarity. Distance of 0 means identical
     /// perceptual hashes.
@@ -86,7 +77,12 @@ impl Similarity {
 
 impl PartialOrd for Similarity {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        self.score.partial_cmp(&other.score)
+        Some(
+            self.score
+                .partial_cmp(&other.score)?
+                .then(self.exact_match.cmp(&other.exact_match))
+                .then(other.perceptual_distance.cmp(&self.perceptual_distance)),
+        )
     }
 }
 
@@ -139,7 +135,7 @@ pub(crate) fn compute_similarity_with_weights(
     block_weight: f32,
     block_threshold: u32,
 ) -> Similarity {
-    let exact_match = a.exact.ct_eq(&b.exact).into();
+    let exact_match = a.exact == b.exact;
 
     if exact_match {
         Similarity {

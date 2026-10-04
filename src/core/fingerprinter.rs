@@ -7,35 +7,78 @@ use crate::hash::dhash::{compute_dhash, compute_dhash_from_64x64};
 use crate::hash::phash::{
     compute_phash_from_64x64_with_scratch, compute_phash_with_scratch, DctScratch,
 };
-use crate::imgproc::decode::{decode_image_with_config, PreprocessConfig};
+use crate::imgproc::decode::{decode_image_with_config, validate_dimensions, PreprocessConfig};
 use crate::imgproc::preprocess::{
     extract_blocks_into_buffer, extract_global_region_into_buffer, Preprocessor,
 };
 use blake3::Hasher;
-use image::GenericImageView;
+use image::{DynamicImage, GenericImageView};
 use std::cell::RefCell;
 use std::path::Path;
 #[cfg(feature = "tracing")]
 use std::time::Instant;
 
-// Reads a file from disk into memory, rejecting inputs larger than the
-// configured cap before any read happens. Keeps oversized files from being
-// pulled into RAM just to be rejected by the decode pass.
+/// Reads a file into memory, never buffering more than
+/// `config.max_input_bytes + 1` bytes.
+///
+/// The size reported by metadata is only a fast-path rejection: special files
+/// (`/dev/zero`, FIFOs, procfs entries) report a length of 0 while yielding
+/// unbounded data, so the read itself is capped with [`Read::take`].
+///
+/// [`Read::take`]: std::io::Read::take
 fn read_image_file(path: &Path, config: &PreprocessConfig) -> Result<Vec<u8>, ImgFprintError> {
-    let metadata = std::fs::metadata(path)?;
-    if metadata.len() > config.max_input_bytes as u64 {
-        return Err(ImgFprintError::IoError(format!(
-            "file size {} bytes exceeds maximum {} bytes",
-            metadata.len(),
-            config.max_input_bytes
-        )));
+    use std::io::Read;
+
+    let max = config.max_input_bytes as u64;
+    let too_large = |size: u64| {
+        ImgFprintError::IoError(format!(
+            "file size {size} bytes exceeds maximum {max} bytes"
+        ))
+    };
+
+    let file = std::fs::File::open(path)?;
+    let reported = file.metadata()?.len();
+    if reported > max {
+        return Err(too_large(reported));
     }
-    std::fs::read(path).map_err(Into::into)
+
+    // `reported` is only a hint (0 for special files); cap the pre-allocation
+    // so a lying size can never trigger a large up-front reservation.
+    #[allow(clippy::cast_possible_truncation)] // reported <= max_input_bytes: usize
+    let mut bytes = Vec::with_capacity(reported as usize);
+    file.take(max.saturating_add(1)).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max {
+        return Err(too_large(bytes.len() as u64));
+    }
+    Ok(bytes)
 }
 
-// Module-level shared thread-local context to avoid duplication
 thread_local! {
+    /// Per-thread context backing the zero-config [`ImageFingerprinter`] API
+    /// and the batch workers.
     static SHARED_CTX: RefCell<FingerprinterContext> = RefCell::new(FingerprinterContext::new());
+}
+
+/// Runs `f` against this thread's shared, default-config context.
+///
+/// Falls back to a fresh context if the shared one is already borrowed. That
+/// can only happen through re-entrancy (e.g. an executor running another
+/// fingerprint task on this thread while one is in progress); the fallback
+/// trades one allocation for never panicking.
+fn with_shared_ctx<T>(f: impl FnOnce(&mut FingerprinterContext) -> T) -> T {
+    SHARED_CTX.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut ctx) => f(&mut ctx),
+        Err(_) => f(&mut FingerprinterContext::new()),
+    })
+}
+
+/// Heap-allocates the zeroed 16-block buffer without first building the
+/// 256 KiB array on the stack (which `Box::new([..])` may do in debug builds).
+fn zeroed_blocks() -> Box<[[f32; 64 * 64]; 16]> {
+    vec![[0.0f32; 64 * 64]; 16]
+        .into_boxed_slice()
+        .try_into()
+        .unwrap_or_else(|_| unreachable!("vec! built exactly 16 blocks"))
 }
 
 #[cfg(feature = "tracing")]
@@ -85,25 +128,43 @@ macro_rules! trace_result_stage {
     }};
 }
 
-/// Context for high-performance fingerprinting with buffer reuse.
+/// Reusable fingerprinting context: the decode guards ([`PreprocessConfig`])
+/// plus every scratch buffer the pipeline needs, so repeated calls allocate
+/// nothing beyond decoding the input.
 ///
-/// Maintains a reusable preprocessor, hasher, and internal buffers
-/// to minimize allocations in high-throughput scenarios.
+/// Keep one per thread and reuse it for every image that thread processes.
+/// The zero-config [`ImageFingerprinter`] functions do exactly that behind a
+/// thread-local, so a context is only needed for custom guards or to own the
+/// buffers explicitly.
 ///
-/// The `blocks_buffer` and `global_region_buffer` are heap-allocated once
-/// and reused across calls, eliminating a 256 KiB + 4 KiB stack allocation
-/// per fingerprint call. This prevents stack overflow under rayon workers
-/// with limited stack sizes.
+/// # Example
+///
+/// ```rust
+/// use imgfprint::{FingerprinterContext, PreprocessConfig};
+///
+/// // Tighter guards for untrusted uploads; applied to every call below.
+/// let mut ctx = FingerprinterContext::with_config(PreprocessConfig {
+///     max_input_bytes: 5 * 1024 * 1024,
+///     max_dimension: 4096,
+///     ..PreprocessConfig::default()
+/// });
+///
+/// for bytes in [b"not an image".to_vec()] {
+///     match ctx.fingerprint(&bytes) {
+///         Ok(fp) => println!("{fp}"),
+///         Err(e) => println!("rejected: {e}"),
+///     }
+/// }
+/// ```
 #[derive(Debug)]
 pub struct FingerprinterContext {
+    config: PreprocessConfig,
     preprocessor: Preprocessor,
     exact_hasher: Hasher,
     dct_scratch: DctScratch,
-    /// Heap-allocated 4x4 grid of 64x64 float blocks (256 KiB).
-    /// Reused across fingerprint calls to avoid per-call stack allocation.
+    /// 4x4 grid of 64x64 float blocks (256 KiB), heap-allocated once.
     blocks_buffer: Box<[[f32; 64 * 64]; 16]>,
-    /// Heap-allocated center 32x32 float region (4 KiB).
-    /// Reused across fingerprint calls to avoid per-call stack allocation.
+    /// Center 32x32 float region (4 KiB), heap-allocated once.
     global_region_buffer: Box<[f32; 32 * 32]>,
 }
 
@@ -114,278 +175,285 @@ impl Default for FingerprinterContext {
 }
 
 impl FingerprinterContext {
-    /// Creates a new fingerprinter context with cached resources.
+    /// Creates a context with the default [`PreprocessConfig`].
     #[must_use]
     pub fn new() -> Self {
+        Self::with_config(PreprocessConfig::default())
+    }
+
+    /// Creates a context whose decode guards come from `config`.
+    ///
+    /// The config applies to every call on this context: the read cap of the
+    /// path methods, the byte-size and dimension guards during decode, and
+    /// the dimension guards of [`fingerprint_image`](Self::fingerprint_image).
+    #[must_use]
+    pub fn with_config(config: PreprocessConfig) -> Self {
         Self {
+            config,
             preprocessor: Preprocessor::new(),
             exact_hasher: Hasher::new(),
             dct_scratch: DctScratch::new(),
-            blocks_buffer: Box::new([[0.0f32; 64 * 64]; 16]),
+            blocks_buffer: zeroed_blocks(),
             global_region_buffer: Box::new([0.0f32; 32 * 32]),
         }
     }
 
-    /// BLAKE3-digests `bytes` with the reusable hasher (reset first).
-    fn update_exact(&mut self, bytes: &[u8]) -> [u8; 32] {
-        self.exact_hasher.reset();
-        self.exact_hasher.update(bytes);
-        *self.exact_hasher.finalize().as_bytes()
+    /// Returns the decode guards this context applies.
+    #[must_use]
+    pub fn config(&self) -> &PreprocessConfig {
+        &self.config
     }
 
-    /// Computes all perceptual hashes in parallel.
+    /// Replaces the decode guards for subsequent calls, keeping the warmed
+    /// buffers.
+    pub fn set_config(&mut self, config: PreprocessConfig) {
+        self.config = config;
+    }
+
+    /// Fingerprints encoded image bytes with all three algorithms
+    /// (AHash, PHash, DHash).
     ///
-    /// Calculates both PHash and DHash simultaneously for improved accuracy.
-    /// Returns a MultiHashFingerprint containing all hash layers.
+    /// The `exact_hash` is the BLAKE3 digest of `image_bytes` exactly as
+    /// given, so two encodings of the same pixels have different exact
+    /// hashes but (near-)identical perceptual hashes. EXIF orientation is
+    /// applied before hashing.
+    ///
+    /// # Errors
+    ///
+    /// - [`ImgFprintError::InvalidImage`]: empty input, input larger than
+    ///   `max_input_bytes`, or an edge larger than `max_dimension`.
+    /// - [`ImgFprintError::ImageTooSmall`]: an edge below `min_dimension`.
+    /// - [`ImgFprintError::UnsupportedFormat`] / [`ImgFprintError::DecodeError`]:
+    ///   unknown format or corrupt data.
     #[cfg_attr(feature = "tracing", instrument(skip(self, image_bytes), fields(size = image_bytes.len())))]
     pub fn fingerprint(
         &mut self,
         image_bytes: &[u8],
     ) -> Result<MultiHashFingerprint, ImgFprintError> {
-        self.fingerprint_with_preprocess(image_bytes, &PreprocessConfig::default())
+        let config = self.config;
+        self.compute_all_hashes(image_bytes, &config)
     }
 
-    /// Computes all perceptual hashes with a tunable [`PreprocessConfig`].
+    /// Fingerprints encoded image bytes with a single algorithm.
     ///
-    /// Use this to tighten or widen the decode-time guards
-    /// (`max_input_bytes`, `max_dimension`, `min_dimension`) per call.
-    #[cfg_attr(feature = "tracing", instrument(skip(self, image_bytes, preprocess), fields(size = image_bytes.len())))]
-    pub fn fingerprint_with_preprocess(
-        &mut self,
-        image_bytes: &[u8],
-        preprocess: &PreprocessConfig,
-    ) -> Result<MultiHashFingerprint, ImgFprintError> {
-        #[cfg(feature = "tracing")]
-        let start = std::time::Instant::now();
-        let result = self.compute_all_hashes(image_bytes, preprocess);
-        #[cfg(feature = "tracing")]
-        debug!(
-            duration_ms = start.elapsed().as_millis(),
-            "fingerprint completed"
-        );
-        result
-    }
-
-    /// Reads an image from disk and computes its multi-algorithm fingerprint.
-    ///
-    /// Convenience wrapper around [`fingerprint`](Self::fingerprint) that handles
-    /// the file read. Files larger than 50 MB are rejected before any read happens.
+    /// The result is bit-identical to the matching layer of
+    /// [`fingerprint`](Self::fingerprint) (e.g. `fingerprint(b)?.phash()`), so
+    /// single- and multi-algorithm indexes stay comparable. Saves only the
+    /// hashing of the other two layers; decode and resize dominate the cost.
     ///
     /// # Errors
     ///
-    /// - [`ImgFprintError::IoError`] if the file cannot be opened, read, or exceeds 50 MB.
-    /// - All errors documented on [`fingerprint`](Self::fingerprint).
-    pub fn fingerprint_path<P: AsRef<Path>>(
-        &mut self,
-        path: P,
-    ) -> Result<MultiHashFingerprint, ImgFprintError> {
-        self.fingerprint_path_with_preprocess(path, &PreprocessConfig::default())
-    }
-
-    /// Reads an image from disk and computes its multi-algorithm fingerprint
-    /// with a tunable [`PreprocessConfig`]. The same config gates both the
-    /// pre-read file-size check and the decode-time guards.
-    pub fn fingerprint_path_with_preprocess<P: AsRef<Path>>(
-        &mut self,
-        path: P,
-        preprocess: &PreprocessConfig,
-    ) -> Result<MultiHashFingerprint, ImgFprintError> {
-        let bytes = read_image_file(path.as_ref(), preprocess)?;
-        self.fingerprint_with_preprocess(&bytes, preprocess)
-    }
-
-    /// Reads an image from disk and computes a single-algorithm fingerprint.
-    ///
-    /// # Errors
-    ///
-    /// - [`ImgFprintError::IoError`] if the file cannot be opened, read, or exceeds 50 MB.
-    /// - All errors documented on [`fingerprint_with`](Self::fingerprint_with).
-    pub fn fingerprint_path_with<P: AsRef<Path>>(
-        &mut self,
-        path: P,
-        algorithm: HashAlgorithm,
-    ) -> Result<ImageFingerprint, ImgFprintError> {
-        let bytes = read_image_file(path.as_ref(), &PreprocessConfig::default())?;
-        self.fingerprint_with(&bytes, algorithm)
-    }
-
-    /// Computes a multi-algorithm fingerprint from an already-decoded [`DynamicImage`].
-    ///
-    /// Skips the decode step entirely — useful when you already hold a
-    /// `DynamicImage` (e.g., from a video frame or in-memory composition).
-    ///
-    /// # Exact hash semantics
-    ///
-    /// Unlike [`fingerprint`](Self::fingerprint) (which hashes the raw
-    /// compressed file bytes), this method computes the BLAKE3 `exact_hash`
-    /// from the **decoded RGB8 pixel buffer**. Consequently:
-    ///
-    /// - Two `DynamicImage` values with identical pixel data will always
-    ///   produce the **same** exact hash, regardless of how they were
-    ///   originally encoded on disk.
-    /// - The exact hash from `fingerprint_image` will **differ** from the
-    ///   exact hash produced by `fingerprint` on the encoded file bytes of
-    ///   the same image.
-    ///
-    /// Use `fingerprint` for byte-level deduplication of files, and
-    /// `fingerprint_image` for pixel-level deduplication of decoded images.
-    ///
-    /// # Errors
-    ///
-    /// - [`ImgFprintError::ImageTooSmall`] if either edge is below the
-    ///   minimum dimension (default 32 px) — same guard as the byte paths.
-    /// - [`ImgFprintError::InvalidImage`] if either edge exceeds the maximum
-    ///   dimension (default 8192 px).
-    /// - [`ImgFprintError::ProcessingError`] if normalization fails.
-    pub fn fingerprint_image(
-        &mut self,
-        image: &image::DynamicImage,
-    ) -> Result<MultiHashFingerprint, ImgFprintError> {
-        self.fingerprint_image_with_preprocess(image, &PreprocessConfig::default())
-    }
-
-    /// Computes a multi-algorithm fingerprint from an already-decoded
-    /// [`DynamicImage`] with a tunable [`PreprocessConfig`].
-    ///
-    /// Same semantics as [`fingerprint_image`](Self::fingerprint_image); the
-    /// config's `min_dimension` / `max_dimension` guards are applied to the
-    /// decoded image dimensions before any hashing happens.
-    ///
-    /// # Errors
-    ///
-    /// See [`fingerprint_image`](Self::fingerprint_image).
-    pub fn fingerprint_image_with_preprocess(
-        &mut self,
-        image: &image::DynamicImage,
-        preprocess: &PreprocessConfig,
-    ) -> Result<MultiHashFingerprint, ImgFprintError> {
-        // Enforce the same dimension guards as the byte-decode paths so a
-        // pre-decoded image can't bypass min/max validation.
-        let (width, height) = image.dimensions();
-        crate::imgproc::decode::validate_dimensions(width, height, preprocess)?;
-
-        // Compute exact hash from RGB8 pixels, avoiding clone when already RGB8.
-        // Luma8/RGBA8 use fast raw (triplicate/stride-copy) conversions that
-        // produce byte-identical input to `to_rgb8()` (verified: Luma maps
-        // Y -> (Y,Y,Y); RGBA drops alpha) without its per-pixel dispatch cost.
-        // The converted bytes feed the hasher directly; no intermediate image.
-        let rgb_owned;
-        let raw: &[u8] = match image {
-            image::DynamicImage::ImageRgb8(rgb) => rgb.as_raw(),
-            image::DynamicImage::ImageLuma8(gray) => {
-                let src = gray.as_raw();
-                let mut buf = Vec::with_capacity(src.len() * 3);
-                for &y in src {
-                    buf.extend_from_slice(&[y, y, y]);
-                }
-                rgb_owned = buf;
-                &rgb_owned
-            }
-            image::DynamicImage::ImageRgba8(rgba) => {
-                let src = rgba.as_raw();
-                let mut buf = Vec::with_capacity(src.len() / 4 * 3);
-                let (chunks, _) = src.as_chunks::<4>();
-                for px in chunks {
-                    buf.extend_from_slice(&px[..3]);
-                }
-                rgb_owned = buf;
-                &rgb_owned
-            }
-            _ => {
-                rgb_owned = image.to_rgb8().into_raw();
-                &rgb_owned
-            }
-        };
-
-        let exact_hash: [u8; 32] = self.update_exact(raw);
-
-        let normalized = self.preprocessor.normalize_as_slice(image)?;
-
-        extract_global_region_into_buffer(normalized, &mut self.global_region_buffer);
-        extract_blocks_into_buffer(normalized, &mut self.blocks_buffer);
-
-        let (ahash_fp, phash_fp, dhash_fp) = self.compute_all_layers(exact_hash)?;
-
-        Ok(MultiHashFingerprint::new(
-            exact_hash, ahash_fp, phash_fp, dhash_fp,
-        ))
-    }
-
-    /// Computes a single perceptual hash using the specified algorithm.
-    ///
-    /// More efficient than computing all hashes when only one algorithm is needed.
+    /// Same as [`fingerprint`](Self::fingerprint).
     #[cfg_attr(feature = "tracing", instrument(skip(self, image_bytes), fields(size = image_bytes.len(), algorithm = ?algorithm)))]
     pub fn fingerprint_with(
         &mut self,
         image_bytes: &[u8],
         algorithm: HashAlgorithm,
     ) -> Result<ImageFingerprint, ImgFprintError> {
-        self.fingerprint_with_algorithm_and_preprocess(
-            image_bytes,
-            algorithm,
-            &PreprocessConfig::default(),
-        )
+        let config = self.config;
+        self.compute_single_hash(image_bytes, algorithm, &config, false)
     }
 
-    /// Computes a single perceptual hash with a tunable [`PreprocessConfig`].
-    #[cfg_attr(feature = "tracing", instrument(skip(self, image_bytes, preprocess), fields(size = image_bytes.len(), algorithm = ?algorithm)))]
+    /// Reads a file (at most `max_input_bytes`) and fingerprints it with all
+    /// three algorithms. Equivalent to [`fingerprint`](Self::fingerprint) on
+    /// the file's bytes.
+    ///
+    /// # Errors
+    ///
+    /// - [`ImgFprintError::IoError`]: the file cannot be read or is larger
+    ///   than `max_input_bytes` (checked while reading, so special files
+    ///   such as FIFOs cannot exhaust memory).
+    /// - Everything documented on [`fingerprint`](Self::fingerprint).
+    pub fn fingerprint_path<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+    ) -> Result<MultiHashFingerprint, ImgFprintError> {
+        let config = self.config;
+        let bytes = read_image_file(path.as_ref(), &config)?;
+        self.compute_all_hashes(&bytes, &config)
+    }
+
+    /// Reads a file (at most `max_input_bytes`) and fingerprints it with a
+    /// single algorithm.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`fingerprint_path`](Self::fingerprint_path).
+    pub fn fingerprint_path_with<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        algorithm: HashAlgorithm,
+    ) -> Result<ImageFingerprint, ImgFprintError> {
+        let config = self.config;
+        let bytes = read_image_file(path.as_ref(), &config)?;
+        self.compute_single_hash(&bytes, algorithm, &config, false)
+    }
+
+    /// Fingerprints an already-decoded image (video frame, in-memory
+    /// composition, custom decoder output) with all three algorithms.
+    ///
+    /// Perceptual hashes equal those of [`fingerprint`](Self::fingerprint) on
+    /// a lossless encoding of the same pixels. The `exact_hash`, however, is
+    /// the BLAKE3 digest of the image's RGB8 pixels (exactly the bytes of
+    /// `image.to_rgb8()`), so identical pixels always share an exact hash
+    /// regardless of how they were encoded or what color type they use.
+    ///
+    /// # Errors
+    ///
+    /// - [`ImgFprintError::ImageTooSmall`] / [`ImgFprintError::InvalidImage`]:
+    ///   an edge outside `min_dimension..=max_dimension`.
+    /// - [`ImgFprintError::ProcessingError`]: normalization failed.
+    pub fn fingerprint_image(
+        &mut self,
+        image: &DynamicImage,
+    ) -> Result<MultiHashFingerprint, ImgFprintError> {
+        let config = self.config;
+        self.compute_image_hashes(image, &config)
+    }
+
+    /// Fingerprints with a one-off [`PreprocessConfig`].
+    #[deprecated(
+        since = "0.4.7",
+        note = "use `FingerprinterContext::with_config(config)` (or `set_config`) and call `fingerprint`"
+    )]
+    pub fn fingerprint_with_preprocess(
+        &mut self,
+        image_bytes: &[u8],
+        preprocess: &PreprocessConfig,
+    ) -> Result<MultiHashFingerprint, ImgFprintError> {
+        self.compute_all_hashes(image_bytes, preprocess)
+    }
+
+    /// Fingerprints a file with a one-off [`PreprocessConfig`].
+    #[deprecated(
+        since = "0.4.7",
+        note = "use `FingerprinterContext::with_config(config)` (or `set_config`) and call `fingerprint_path`"
+    )]
+    pub fn fingerprint_path_with_preprocess<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        preprocess: &PreprocessConfig,
+    ) -> Result<MultiHashFingerprint, ImgFprintError> {
+        let bytes = read_image_file(path.as_ref(), preprocess)?;
+        self.compute_all_hashes(&bytes, preprocess)
+    }
+
+    /// Fingerprints a decoded image with a one-off [`PreprocessConfig`].
+    #[deprecated(
+        since = "0.4.7",
+        note = "use `FingerprinterContext::with_config(config)` (or `set_config`) and call `fingerprint_image`"
+    )]
+    pub fn fingerprint_image_with_preprocess(
+        &mut self,
+        image: &DynamicImage,
+        preprocess: &PreprocessConfig,
+    ) -> Result<MultiHashFingerprint, ImgFprintError> {
+        self.compute_image_hashes(image, preprocess)
+    }
+
+    /// Single-algorithm fingerprint with a one-off [`PreprocessConfig`].
+    #[deprecated(
+        since = "0.4.7",
+        note = "use `FingerprinterContext::with_config(config)` (or `set_config`) and call `fingerprint_with`"
+    )]
     pub fn fingerprint_with_algorithm_and_preprocess(
         &mut self,
         image_bytes: &[u8],
         algorithm: HashAlgorithm,
         preprocess: &PreprocessConfig,
     ) -> Result<ImageFingerprint, ImgFprintError> {
-        #[cfg(feature = "tracing")]
-        let start = std::time::Instant::now();
-        let result = self.compute_single_hash(image_bytes, algorithm, preprocess, false);
-        #[cfg(feature = "tracing")]
-        debug!(
-            duration_ms = start.elapsed().as_millis(),
-            "fingerprint_with completed"
-        );
-        result
+        self.compute_single_hash(image_bytes, algorithm, preprocess, false)
     }
 
-    /// Computes a single perceptual hash using a faster bilinear resize.
+    /// Single-algorithm fingerprint using a bilinear instead of Lanczos3
+    /// resize for AHash/DHash (PHash always uses Lanczos3).
     ///
-    /// # Consistency warning
-    ///
-    /// This method resizes with **bilinear** filtering, while
-    /// [`fingerprint`](Self::fingerprint) and
-    /// [`fingerprint_with`](Self::fingerprint_with) use **Lanczos3**.
-    /// Fingerprints produced here are therefore *not* bit-identical to those
-    /// produced by the standard methods for the same image and algorithm —
-    /// comparing fingerprints across modes can shift similarity scores by
-    /// several Hamming bits. Only use this method when **every** fingerprint
-    /// in your index and every query fingerprint is produced by this method.
-    ///
-    /// The speedup comes from the resize stage (~2x faster resize); AHash and
-    /// DHash tolerate the simpler interpolation.
-    /// [`HashAlgorithm::PHash`] falls back to the Lanczos3 path because its
-    /// DCT requires high-quality downsampling.
-    ///
-    /// # Errors
-    ///
-    /// Same errors as [`fingerprint_with`](Self::fingerprint_with).
-    #[cfg_attr(feature = "tracing", instrument(skip(self, image_bytes), fields(size = image_bytes.len(), algorithm = ?algorithm)))]
+    /// Output is **not** bit-compatible with any other entry point.
+    #[deprecated(
+        since = "0.4.7",
+        note = "bit-incompatible with every other entry point for a small end-to-end gain (decode dominates); use `fingerprint_with`"
+    )]
     pub fn fingerprint_with_fast(
         &mut self,
         image_bytes: &[u8],
         algorithm: HashAlgorithm,
     ) -> Result<ImageFingerprint, ImgFprintError> {
-        self.compute_single_hash(image_bytes, algorithm, &PreprocessConfig::default(), true)
+        let config = self.config;
+        self.compute_single_hash(image_bytes, algorithm, &config, true)
     }
 
-    /// Internal: computes all three perceptual hashes plus the BLAKE3 exact hash.
+    /// Fingerprints `images` and invokes `callback` for each result in input
+    /// order. With the `parallel` feature the work runs on rayon workers and
+    /// this context's buffers are not used.
+    #[deprecated(
+        since = "0.4.7",
+        note = "the inputs are already in memory, so chunking bounds nothing; use `ImageFingerprinter::fingerprint_batch`, or `ImageFingerprinter::fingerprint_paths` for bounded memory"
+    )]
+    pub fn fingerprint_batch_chunked<S, F>(
+        &mut self,
+        images: &[(S, Vec<u8>)],
+        chunk_size: usize,
+        callback: F,
+    ) where
+        S: Send + Sync + Clone + 'static,
+        F: FnMut(S, Result<MultiHashFingerprint, ImgFprintError>),
+    {
+        batch_chunked(images, chunk_size, callback);
+    }
+
+    /// BLAKE3-digests `bytes` with the reusable hasher.
+    fn update_exact(&mut self, bytes: &[u8]) -> [u8; 32] {
+        self.exact_hasher.reset();
+        self.exact_hasher.update(bytes);
+        *self.exact_hasher.finalize().as_bytes()
+    }
+
+    /// BLAKE3 of the image's RGB8 pixel bytes, i.e. of `image.to_rgb8()`.
     ///
-    /// The `exact_hash` field in the returned [`MultiHashFingerprint`] is the
-    /// BLAKE3 digest of the **raw compressed file bytes** (`image_bytes`). This
-    /// means two files with identical pixel content but different encodings
-    /// (e.g., the same photo saved as PNG vs JPEG, or two JPEG files with
-    /// different compression settings) will produce **different** exact hashes.
-    ///
-    /// For an exact hash computed from decoded pixel data instead, see
-    /// [`fingerprint_image`](Self::fingerprint_image).
+    /// RGB8 is hashed in place. Luma8 and RGBA8 are converted through a small
+    /// stack buffer instead of a full-frame copy, producing byte-identical
+    /// input (Luma maps Y -> (Y,Y,Y); RGBA drops alpha). Only the
+    /// `width * height * channels` prefix of the container is hashed, so
+    /// over-allocated buffers (allowed by `ImageBuffer::from_raw`) cannot
+    /// change the digest.
+    fn pixel_exact_hash(&mut self, image: &DynamicImage) -> [u8; 32] {
+        const CHUNK_PIXELS: usize = 4096;
+        let pixels = image.width() as usize * image.height() as usize;
+
+        self.exact_hasher.reset();
+        match image {
+            DynamicImage::ImageRgb8(rgb) => {
+                self.exact_hasher.update(&rgb.as_raw()[..pixels * 3]);
+            }
+            DynamicImage::ImageLuma8(gray) => {
+                let mut out = [0u8; CHUNK_PIXELS * 3];
+                for chunk in gray.as_raw()[..pixels].chunks(CHUNK_PIXELS) {
+                    let (dst, _) = out[..chunk.len() * 3].as_chunks_mut::<3>();
+                    for (d, &y) in dst.iter_mut().zip(chunk) {
+                        *d = [y, y, y];
+                    }
+                    self.exact_hasher.update(&out[..chunk.len() * 3]);
+                }
+            }
+            DynamicImage::ImageRgba8(rgba) => {
+                let mut out = [0u8; CHUNK_PIXELS * 3];
+                for chunk in rgba.as_raw()[..pixels * 4].chunks(CHUNK_PIXELS * 4) {
+                    let (src, _) = chunk.as_chunks::<4>();
+                    let (dst, _) = out[..src.len() * 3].as_chunks_mut::<3>();
+                    for (d, s) in dst.iter_mut().zip(src) {
+                        *d = [s[0], s[1], s[2]];
+                    }
+                    self.exact_hasher.update(&out[..src.len() * 3]);
+                }
+            }
+            other => {
+                self.exact_hasher.update(other.to_rgb8().as_raw());
+            }
+        }
+        *self.exact_hasher.finalize().as_bytes()
+    }
+
+    /// All three layers from encoded bytes; `exact_hash` covers the raw bytes.
     fn compute_all_hashes(
         &mut self,
         image_bytes: &[u8],
@@ -396,9 +464,44 @@ impl FingerprinterContext {
         let image = trace_result_stage!("decode", {
             decode_image_with_config(image_bytes, preprocess)
         });
-        let normalized = trace_result_stage!("normalize", {
-            self.preprocessor.normalize_as_slice(&image)
-        });
+        self.hash_decoded(&image, exact_hash)
+    }
+
+    /// All three layers from a decoded image; `exact_hash` covers RGB8 pixels.
+    fn compute_image_hashes(
+        &mut self,
+        image: &DynamicImage,
+        preprocess: &PreprocessConfig,
+    ) -> Result<MultiHashFingerprint, ImgFprintError> {
+        let (width, height) = image.dimensions();
+        validate_dimensions(width, height, preprocess)?;
+
+        // Color types without a native resize lane are converted to RGB8
+        // once and shared by the exact hash and the resize (both would
+        // otherwise run their own full-frame `to_rgb8()`).
+        let converted;
+        let image = match image {
+            DynamicImage::ImageRgb8(_)
+            | DynamicImage::ImageRgba8(_)
+            | DynamicImage::ImageLuma8(_) => image,
+            other => {
+                converted = DynamicImage::ImageRgb8(other.to_rgb8());
+                &converted
+            }
+        };
+
+        let exact_hash = trace_stage!("exact_hash", { self.pixel_exact_hash(image) });
+        self.hash_decoded(image, exact_hash)
+    }
+
+    /// Normalizes `image` and computes all three perceptual layers.
+    fn hash_decoded(
+        &mut self,
+        image: &DynamicImage,
+        exact_hash: [u8; 32],
+    ) -> Result<MultiHashFingerprint, ImgFprintError> {
+        let normalized =
+            trace_result_stage!("normalize", { self.preprocessor.normalize_as_slice(image) });
 
         trace_stage!("extract_global_region", {
             extract_global_region_into_buffer(normalized, &mut self.global_region_buffer)
@@ -417,66 +520,30 @@ impl FingerprinterContext {
 
     /// Computes all three perceptual layers from the extracted buffers.
     ///
-    /// Shared by [`compute_all_hashes`](Self::compute_all_hashes) and the
-    /// already-decoded [`fingerprint_image_with_preprocess`](Self::fingerprint_image_with_preprocess)
-    /// path so the parallel/sequential fan-out lives in exactly one place.
-    /// Output is bit-identical under both `parallel` configurations.
+    /// Runs sequentially on purpose: hashing is ~0.3 ms of CPU per image,
+    /// far below the cost of a rayon fork/join. Fanning out *inside* one
+    /// image made single-image calls burn ~2.8x more CPU, oversubscribed
+    /// batch workers, and let work-stealing re-enter the thread-local
+    /// context mid-borrow. Parallelism belongs across images (batch APIs).
     fn compute_all_layers(
         &mut self,
         exact_hash: [u8; 32],
     ) -> Result<(ImageFingerprint, ImageFingerprint, ImageFingerprint), ImgFprintError> {
-        #[cfg(feature = "parallel")]
-        {
-            let (ahash_result, (phash_result, dhash_result)) = rayon::join(
-                || Self::compute_ahash_data(&self.global_region_buffer, &self.blocks_buffer),
-                || {
-                    rayon::join(
-                        || {
-                            Self::compute_phash_data(
-                                &self.global_region_buffer,
-                                &self.blocks_buffer,
-                                &mut self.dct_scratch,
-                            )
-                        },
-                        || {
-                            Self::compute_dhash_data(
-                                &self.global_region_buffer,
-                                &self.blocks_buffer,
-                            )
-                        },
-                    )
-                },
-            );
+        let (ahash_global, ahash_blocks) =
+            Self::compute_ahash_data(&self.global_region_buffer, &self.blocks_buffer);
+        let (phash_global, phash_blocks) = Self::compute_phash_data(
+            &self.global_region_buffer,
+            &self.blocks_buffer,
+            &mut self.dct_scratch,
+        )?;
+        let (dhash_global, dhash_blocks) =
+            Self::compute_dhash_data(&self.global_region_buffer, &self.blocks_buffer);
 
-            let (ahash_global, ahash_blocks) = ahash_result;
-            let (phash_global, phash_blocks) = phash_result?;
-            let (dhash_global, dhash_blocks) = dhash_result;
-
-            Ok((
-                ImageFingerprint::new(exact_hash, ahash_global, ahash_blocks),
-                ImageFingerprint::new(exact_hash, phash_global, phash_blocks),
-                ImageFingerprint::new(exact_hash, dhash_global, dhash_blocks),
-            ))
-        }
-
-        #[cfg(not(feature = "parallel"))]
-        {
-            let (ahash_global, ahash_blocks) =
-                Self::compute_ahash_data(&self.global_region_buffer, &self.blocks_buffer);
-            let (phash_global, phash_blocks) = Self::compute_phash_data(
-                &self.global_region_buffer,
-                &self.blocks_buffer,
-                &mut self.dct_scratch,
-            )?;
-            let (dhash_global, dhash_blocks) =
-                Self::compute_dhash_data(&self.global_region_buffer, &self.blocks_buffer);
-
-            Ok((
-                ImageFingerprint::new(exact_hash, ahash_global, ahash_blocks),
-                ImageFingerprint::new(exact_hash, phash_global, phash_blocks),
-                ImageFingerprint::new(exact_hash, dhash_global, dhash_blocks),
-            ))
-        }
+        Ok((
+            ImageFingerprint::new(exact_hash, ahash_global, ahash_blocks),
+            ImageFingerprint::new(exact_hash, phash_global, phash_blocks),
+            ImageFingerprint::new(exact_hash, dhash_global, dhash_blocks),
+        ))
     }
 
     fn compute_single_hash(
@@ -492,11 +559,10 @@ impl FingerprinterContext {
             decode_image_with_config(image_bytes, preprocess)
         });
 
-        // Default path uses Lanczos3 for every algorithm so that
-        // `fingerprint_with(bytes, alg)` is bit-identical to the `alg` layer
-        // of `fingerprint(bytes)`. The bilinear fast path is opt-in via
-        // `fingerprint_with_fast` (see its docs for the consistency caveat).
-        // PHash always uses Lanczos3 — its DCT needs high-quality downsampling.
+        // Lanczos3 for every algorithm keeps `fingerprint_with(bytes, alg)`
+        // bit-identical to the `alg` layer of `fingerprint(bytes)`. The
+        // bilinear path only serves the deprecated `fingerprint_with_fast`;
+        // PHash always uses Lanczos3 (its DCT needs high-quality input).
         let normalized = match algorithm {
             HashAlgorithm::AHash | HashAlgorithm::DHash if fast_resize => {
                 trace_result_stage!("normalize_fast", {
@@ -541,31 +607,10 @@ impl FingerprinterContext {
     ) -> Result<(u64, [u64; 16]), ImgFprintError> {
         let global_hash = compute_phash_with_scratch(global_region, scratch)?;
 
-        // The 16 block hashes are independent, so with the `parallel` feature
-        // they are computed across rayon workers (one DctScratch per worker).
-        // Output is bit-identical to the sequential loop.
-        #[cfg(feature = "parallel")]
-        let block_hashes = {
-            use rayon::prelude::*;
-            let hashes: Vec<u64> = blocks
-                .par_iter()
-                .map_init(DctScratch::new, |block_scratch, block| {
-                    compute_phash_from_64x64_with_scratch(block, block_scratch)
-                })
-                .collect::<Result<Vec<u64>, _>>()?;
-            let mut arr = [0u64; 16];
-            arr.copy_from_slice(&hashes);
-            arr
-        };
-
-        #[cfg(not(feature = "parallel"))]
-        let block_hashes = {
-            let mut hashes = [0u64; 16];
-            for (i, block) in blocks.iter().enumerate() {
-                hashes[i] = compute_phash_from_64x64_with_scratch(block, scratch)?;
-            }
-            hashes
-        };
+        let mut block_hashes = [0u64; 16];
+        for (hash, block) in block_hashes.iter_mut().zip(blocks.iter()) {
+            *hash = compute_phash_from_64x64_with_scratch(block, scratch)?;
+        }
 
         Ok((global_hash, block_hashes))
     }
@@ -574,387 +619,235 @@ impl FingerprinterContext {
         global_region: &[f32; 32 * 32],
         blocks: &[[f32; 64 * 64]; 16],
     ) -> (u64, [u64; 16]) {
-        let global_hash = compute_ahash(global_region);
-
         let mut hashes = [0u64; 16];
-        for (i, block) in blocks.iter().enumerate() {
-            hashes[i] = compute_ahash_from_64x64(block);
+        for (hash, block) in hashes.iter_mut().zip(blocks.iter()) {
+            *hash = compute_ahash_from_64x64(block);
         }
-
-        (global_hash, hashes)
+        (compute_ahash(global_region), hashes)
     }
 
     fn compute_dhash_data(
         global_region: &[f32; 32 * 32],
         blocks: &[[f32; 64 * 64]; 16],
     ) -> (u64, [u64; 16]) {
-        let global_dhash = compute_dhash(global_region);
-
         let mut hashes = [0u64; 16];
-        for (i, block) in blocks.iter().enumerate() {
-            hashes[i] = compute_dhash_from_64x64(block);
+        for (hash, block) in hashes.iter_mut().zip(blocks.iter()) {
+            *hash = compute_dhash_from_64x64(block);
         }
-
-        (global_dhash, hashes)
-    }
-
-    /// Computes fingerprints for multiple images in chunks to limit memory usage.
-    ///
-    /// Processes images in chunks of `chunk_size` and invokes the callback
-    /// for each result. This prevents unbounded memory consumption when
-    /// processing large batches.
-    ///
-    /// With the `parallel` feature enabled, each chunk is fingerprinted in
-    /// parallel (per-worker contexts, same strategy as
-    /// [`fingerprint_batch`](crate::ImageFingerprinter::fingerprint_batch));
-    /// the callback is still invoked sequentially in input order, so
-    /// observable behavior matches the sequential implementation.
-    #[cfg_attr(feature = "tracing", instrument(skip(self, images, callback), fields(chunk_size, image_count = images.len())))]
-    pub fn fingerprint_batch_chunked<S, F>(
-        &mut self,
-        images: &[(S, Vec<u8>)],
-        chunk_size: usize,
-        mut callback: F,
-    ) where
-        S: Send + Sync + Clone + 'static,
-        F: FnMut(S, Result<MultiHashFingerprint, ImgFprintError>),
-    {
-        let chunk_size = chunk_size.max(1);
-
-        #[cfg(feature = "tracing")]
-        tracing::debug!(
-            chunk_size,
-            image_count = images.len(),
-            "starting chunked batch processing"
-        );
-
-        #[cfg(feature = "tracing")]
-        let start = std::time::Instant::now();
-
-        #[cfg(feature = "tracing")]
-        let mut processed = 0usize;
-        #[cfg(feature = "tracing")]
-        let mut failed = 0usize;
-
-        #[cfg(feature = "parallel")]
-        {
-            use rayon::prelude::*;
-
-            for chunk in images.chunks(chunk_size) {
-                // Fingerprint the chunk in parallel with per-worker contexts,
-                // then drain results in input order so the callback sequence
-                // is deterministic.
-                let results: Vec<(S, Result<MultiHashFingerprint, ImgFprintError>)> = chunk
-                    .par_iter()
-                    .map_init(FingerprinterContext::new, |ctx, (id, bytes)| {
-                        (id.clone(), ctx.fingerprint(bytes))
-                    })
-                    .collect();
-
-                for (id, result) in results {
-                    #[cfg(feature = "tracing")]
-                    {
-                        if result.is_err() {
-                            failed += 1;
-                        }
-                        processed += 1;
-                    }
-                    callback(id, result);
-                }
-            }
-        }
-
-        #[cfg(not(feature = "parallel"))]
-        for chunk in images.chunks(chunk_size) {
-            for (id, bytes) in chunk {
-                let result = self.fingerprint(bytes);
-                #[cfg(feature = "tracing")]
-                {
-                    if result.is_err() {
-                        failed += 1;
-                    }
-                    processed += 1;
-                }
-                callback(id.clone(), result);
-            }
-        }
-
-        #[cfg(feature = "tracing")]
-        debug!(
-            duration_ms = start.elapsed().as_millis(),
-            processed, failed, "batch processing completed"
-        );
+        (compute_dhash(global_region), hashes)
     }
 }
 
-/// Static methods for computing and comparing image fingerprints.
+/// Runs `f` over every input in order, on rayon workers with the `parallel`
+/// feature (each worker reuses its thread-local context) and sequentially
+/// otherwise.
+fn run_batch<In, Out, F>(
+    inputs: Vec<In>,
+    #[cfg_attr(not(feature = "tracing"), allow(unused_variables))] stage: &'static str,
+    f: F,
+) -> Vec<Out>
+where
+    In: Send,
+    Out: Send,
+    F: Fn(&mut FingerprinterContext, In) -> Out + Send + Sync,
+{
+    #[cfg(feature = "tracing")]
+    let start = std::time::Instant::now();
+
+    #[cfg(feature = "parallel")]
+    let results: Vec<Out> = {
+        use rayon::prelude::*;
+        inputs
+            .into_par_iter()
+            .map(|input| with_shared_ctx(|ctx| f(ctx, input)))
+            .collect()
+    };
+
+    #[cfg(not(feature = "parallel"))]
+    let results: Vec<Out> =
+        with_shared_ctx(|ctx| inputs.into_iter().map(|input| f(ctx, input)).collect());
+
+    #[cfg(feature = "tracing")]
+    debug!(
+        duration_ms = start.elapsed().as_millis(),
+        count = results.len(),
+        parallel = cfg!(feature = "parallel"),
+        "{stage} completed"
+    );
+
+    results
+}
+
+/// Shared body of the deprecated `fingerprint_batch_chunked` functions.
+fn batch_chunked<S, F>(images: &[(S, Vec<u8>)], chunk_size: usize, mut callback: F)
+where
+    S: Send + Sync + Clone,
+    F: FnMut(S, Result<MultiHashFingerprint, ImgFprintError>),
+{
+    for chunk in images.chunks(chunk_size.max(1)) {
+        let refs: Vec<&(S, Vec<u8>)> = chunk.iter().collect();
+        for (id, result) in run_batch(refs, "batch_chunked", |ctx, (id, bytes)| {
+            (id.clone(), ctx.fingerprint(bytes))
+        }) {
+            callback(id, result);
+        }
+    }
+}
+
+/// Zero-config entry points backed by a per-thread [`FingerprinterContext`]
+/// with the default [`PreprocessConfig`].
 ///
-/// Provides both single-algorithm and multi-algorithm fingerprinting.
-/// Multi-algorithm mode (default) computes PHash and DHash in parallel
-/// for improved accuracy through weighted combination.
+/// Use [`FingerprinterContext::with_config`] for custom decode guards.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use imgfprint::ImageFingerprinter;
+///
+/// let a = ImageFingerprinter::fingerprint_path("a.jpg")?;
+/// let b = ImageFingerprinter::fingerprint_path("b.jpg")?;
+/// if a.is_similar(&b, 0.85) {
+///     println!("near-duplicates (score {:.3})", a.compare(&b).score);
+/// }
+/// # Ok::<(), imgfprint::ImgFprintError>(())
+/// ```
 pub struct ImageFingerprinter;
 
 impl ImageFingerprinter {
-    /// Computes all perceptual hashes in parallel.
+    /// Fingerprints encoded image bytes with all three algorithms.
     ///
-    /// Calculates both PHash and DHash simultaneously and returns a
-    /// MultiHashFingerprint containing both hash layers. This provides
-    /// superior accuracy compared to single-algorithm fingerprinting.
-    ///
-    /// # Exact hash semantics
-    ///
-    /// The `exact_hash` field is the BLAKE3 digest of `image_bytes` — the raw
-    /// compressed file bytes as passed in. Two files encoding the same pixels
-    /// differently (e.g., two distinct PNG encodings) will yield **different**
-    /// exact hashes. For pixel-level exact matching, use
-    /// [`fingerprint_image`](Self::fingerprint_image) instead.
+    /// See [`FingerprinterContext::fingerprint`] for exact-hash semantics and
+    /// errors.
     ///
     /// # Errors
     ///
-    /// Returns `ImgFprintError` if any algorithm fails.
+    /// See [`FingerprinterContext::fingerprint`].
     pub fn fingerprint(image_bytes: &[u8]) -> Result<MultiHashFingerprint, ImgFprintError> {
-        SHARED_CTX.with(|ctx| ctx.borrow_mut().fingerprint(image_bytes))
+        with_shared_ctx(|ctx| ctx.fingerprint(image_bytes))
     }
 
-    /// Computes all perceptual hashes with a tunable [`PreprocessConfig`].
-    pub fn fingerprint_with_preprocess(
-        image_bytes: &[u8],
-        preprocess: &PreprocessConfig,
-    ) -> Result<MultiHashFingerprint, ImgFprintError> {
-        SHARED_CTX.with(|ctx| {
-            ctx.borrow_mut()
-                .fingerprint_with_preprocess(image_bytes, preprocess)
-        })
-    }
-
-    /// Reads an image from disk and computes its multi-algorithm fingerprint.
-    ///
-    /// Convenience wrapper around [`fingerprint`](Self::fingerprint) that handles
-    /// the file read. Files larger than 50 MB are rejected before any read happens.
+    /// Fingerprints encoded image bytes with a single algorithm; bit-identical
+    /// to the matching layer of [`fingerprint`](Self::fingerprint).
     ///
     /// # Errors
     ///
-    /// - [`ImgFprintError::IoError`] if the file cannot be opened, read, or exceeds 50 MB.
-    /// - All errors documented on [`fingerprint`](Self::fingerprint).
-    pub fn fingerprint_path<P: AsRef<Path>>(
-        path: P,
-    ) -> Result<MultiHashFingerprint, ImgFprintError> {
-        Self::fingerprint_path_with_preprocess(path, &PreprocessConfig::default())
-    }
-
-    /// Reads an image from disk and computes its multi-algorithm fingerprint
-    /// with a tunable [`PreprocessConfig`].
-    pub fn fingerprint_path_with_preprocess<P: AsRef<Path>>(
-        path: P,
-        preprocess: &PreprocessConfig,
-    ) -> Result<MultiHashFingerprint, ImgFprintError> {
-        let bytes = read_image_file(path.as_ref(), preprocess)?;
-        Self::fingerprint_with_preprocess(&bytes, preprocess)
-    }
-
-    /// Reads an image from disk and computes a single-algorithm fingerprint.
-    ///
-    /// # Errors
-    ///
-    /// - [`ImgFprintError::IoError`] if the file cannot be opened, read, or exceeds 50 MB.
-    /// - All errors documented on [`fingerprint_with`](Self::fingerprint_with).
-    pub fn fingerprint_path_with<P: AsRef<Path>>(
-        path: P,
-        algorithm: HashAlgorithm,
-    ) -> Result<ImageFingerprint, ImgFprintError> {
-        let bytes = read_image_file(path.as_ref(), &PreprocessConfig::default())?;
-        Self::fingerprint_with(&bytes, algorithm)
-    }
-
-    /// Computes a multi-algorithm fingerprint from an already-decoded [`DynamicImage`].
-    ///
-    /// Skips the decode step — useful when you already hold a `DynamicImage`
-    /// (e.g., from a video frame or in-memory composition).
-    ///
-    /// # Exact hash semantics
-    ///
-    /// The `exact_hash` is computed from the **decoded RGB8 pixel buffer**,
-    /// not from file bytes. Two images with identical pixels will produce the
-    /// same exact hash regardless of their on-disk encoding. See
-    /// [`fingerprint`](Self::fingerprint) for file-byte-based exact hashing.
-    pub fn fingerprint_image(
-        image: &image::DynamicImage,
-    ) -> Result<MultiHashFingerprint, ImgFprintError> {
-        SHARED_CTX.with(|ctx| ctx.borrow_mut().fingerprint_image(image))
-    }
-
-    /// Computes a multi-algorithm fingerprint from an already-decoded
-    /// [`DynamicImage`] with a tunable [`PreprocessConfig`].
-    pub fn fingerprint_image_with_preprocess(
-        image: &image::DynamicImage,
-        preprocess: &PreprocessConfig,
-    ) -> Result<MultiHashFingerprint, ImgFprintError> {
-        SHARED_CTX.with(|ctx| {
-            ctx.borrow_mut()
-                .fingerprint_image_with_preprocess(image, preprocess)
-        })
-    }
-
-    /// Computes a single perceptual hash using the specified algorithm.
-    ///
-    /// Use this when you need a specific algorithm or want to minimize
-    /// computation for high-throughput scenarios.
-    ///
-    /// # Arguments
-    /// * `image_bytes` - Raw image data
-    /// * `algorithm` - Hash algorithm to use (PHash or DHash)
+    /// See [`FingerprinterContext::fingerprint`].
     pub fn fingerprint_with(
         image_bytes: &[u8],
         algorithm: HashAlgorithm,
     ) -> Result<ImageFingerprint, ImgFprintError> {
-        SHARED_CTX.with(|ctx| ctx.borrow_mut().fingerprint_with(image_bytes, algorithm))
+        with_shared_ctx(|ctx| ctx.fingerprint_with(image_bytes, algorithm))
     }
 
-    /// Computes a single perceptual hash using a faster bilinear resize.
+    /// Reads a file (at most [`DEFAULT_MAX_INPUT_BYTES`](crate::DEFAULT_MAX_INPUT_BYTES))
+    /// and fingerprints it with all three algorithms.
     ///
-    /// See [`FingerprinterContext::fingerprint_with_fast`] for the
-    /// cross-mode consistency warning — fingerprints from this method are
-    /// not bit-identical to those from [`fingerprint_with`](Self::fingerprint_with).
-    pub fn fingerprint_with_fast(
-        image_bytes: &[u8],
+    /// # Errors
+    ///
+    /// See [`FingerprinterContext::fingerprint_path`].
+    pub fn fingerprint_path<P: AsRef<Path>>(
+        path: P,
+    ) -> Result<MultiHashFingerprint, ImgFprintError> {
+        with_shared_ctx(|ctx| ctx.fingerprint_path(path))
+    }
+
+    /// Reads a file and fingerprints it with a single algorithm.
+    ///
+    /// # Errors
+    ///
+    /// See [`FingerprinterContext::fingerprint_path`].
+    pub fn fingerprint_path_with<P: AsRef<Path>>(
+        path: P,
         algorithm: HashAlgorithm,
     ) -> Result<ImageFingerprint, ImgFprintError> {
-        SHARED_CTX.with(|ctx| {
-            ctx.borrow_mut()
-                .fingerprint_with_fast(image_bytes, algorithm)
-        })
+        with_shared_ctx(|ctx| ctx.fingerprint_path_with(path, algorithm))
     }
 
-    /// Compares two fingerprints and returns a similarity score.
+    /// Fingerprints an already-decoded image; the exact hash covers its RGB8
+    /// pixels. See [`FingerprinterContext::fingerprint_image`].
     ///
-    /// For MultiHashFingerprint, use the compare() method directly.
-    /// For ImageFingerprint, this computes similarity using the global hash.
-    #[must_use]
-    pub fn compare(a: &ImageFingerprint, b: &ImageFingerprint) -> similarity::Similarity {
-        similarity::compute_similarity(a, b)
-    }
-
-    /// Generates a semantic embedding for the given image using an external provider.
-    pub fn semantic_embedding<P: crate::embed::EmbeddingProvider>(
-        provider: &P,
-        image: &[u8],
-    ) -> Result<crate::embed::Embedding, ImgFprintError> {
-        provider.embed(image)
-    }
-
-    /// Compares two semantic embeddings using cosine similarity.
-    pub fn semantic_similarity(
-        a: &crate::embed::Embedding,
-        b: &crate::embed::Embedding,
-    ) -> Result<f32, ImgFprintError> {
-        crate::embed::semantic_similarity(a, b)
-    }
-
-    /// Runs `f` over every image, preserving input order, in parallel when the
-    /// `parallel` feature is on (per-worker contexts) and sequentially otherwise.
-    fn run_batch<S, T, F>(
-        images: &[(S, Vec<u8>)],
-        #[cfg_attr(not(feature = "tracing"), allow(unused_variables))] stage: &'static str,
-        f: F,
-    ) -> Vec<(S, T)>
-    where
-        S: Send + Sync + Clone + 'static,
-        T: Send,
-        F: Fn(&mut FingerprinterContext, &[u8]) -> T + Send + Sync,
-    {
-        #[cfg(feature = "tracing")]
-        let start = std::time::Instant::now();
-
-        #[cfg(feature = "parallel")]
-        let results: Vec<(S, T)> = {
-            use rayon::prelude::*;
-
-            images
-                .par_iter()
-                .map_init(FingerprinterContext::new, |ctx, (id, bytes)| {
-                    (id.clone(), f(ctx, bytes))
-                })
-                .collect()
-        };
-
-        #[cfg(not(feature = "parallel"))]
-        let results: Vec<(S, T)> = {
-            let mut ctx = FingerprinterContext::new();
-            images
-                .iter()
-                .map(|(id, bytes)| (id.clone(), f(&mut ctx, bytes)))
-                .collect()
-        };
-
-        #[cfg(feature = "tracing")]
-        {
-            #[cfg(feature = "parallel")]
-            let mode = "parallel";
-            #[cfg(not(feature = "parallel"))]
-            let mode = "sequential";
-            debug!(
-                duration_ms = start.elapsed().as_millis(),
-                count = results.len(),
-                "{mode} {stage} completed"
-            );
-        }
-
-        results
-    }
-
-    /// Computes fingerprints for multiple images in batch.
+    /// # Errors
     ///
-    /// Processes each image independently and returns results in the same order.
-    /// When the `parallel` feature is enabled, uses per-thread context caching
-    /// to minimize allocations across parallel workers.
+    /// See [`FingerprinterContext::fingerprint_image`].
+    pub fn fingerprint_image(image: &DynamicImage) -> Result<MultiHashFingerprint, ImgFprintError> {
+        with_shared_ctx(|ctx| ctx.fingerprint_image(image))
+    }
+
+    /// Fingerprints in-memory images, returning results in input order.
+    ///
+    /// With the `parallel` feature (default) images are spread across rayon
+    /// workers, each reusing a per-thread context.
     #[cfg_attr(feature = "tracing", instrument(skip(images), fields(image_count = images.len())))]
     pub fn fingerprint_batch<S>(
         images: &[(S, Vec<u8>)],
     ) -> Vec<(S, Result<MultiHashFingerprint, ImgFprintError>)>
     where
-        S: Send + Sync + Clone + 'static,
+        S: Clone + Send + Sync,
     {
-        Self::run_batch(images, "batch", |ctx, bytes| ctx.fingerprint(bytes))
+        let refs: Vec<&(S, Vec<u8>)> = images.iter().collect();
+        run_batch(refs, "batch", |ctx, (id, bytes)| {
+            (id.clone(), ctx.fingerprint(bytes))
+        })
     }
 
-    /// Computes fingerprints with specific algorithm for multiple images.
+    /// Single-algorithm variant of [`fingerprint_batch`](Self::fingerprint_batch).
     #[cfg_attr(feature = "tracing", instrument(skip(images), fields(image_count = images.len(), algorithm = ?algorithm)))]
     pub fn fingerprint_batch_with<S>(
         images: &[(S, Vec<u8>)],
         algorithm: HashAlgorithm,
     ) -> Vec<(S, Result<ImageFingerprint, ImgFprintError>)>
     where
-        S: Send + Sync + Clone + 'static,
+        S: Clone + Send + Sync,
     {
-        Self::run_batch(images, "batch_with", |ctx, bytes| {
-            ctx.fingerprint_with(bytes, algorithm)
+        let refs: Vec<&(S, Vec<u8>)> = images.iter().collect();
+        run_batch(refs, "batch_with", |ctx, (id, bytes)| {
+            (id.clone(), ctx.fingerprint_with(bytes, algorithm))
         })
     }
 
-    /// Computes fingerprints for multiple images in chunks to limit memory usage.
+    /// Fingerprints many files, returning `(path, result)` in input order.
     ///
-    /// Processes images in chunks of `chunk_size` and invokes the callback
-    /// for each result. This prevents unbounded memory consumption when
-    /// processing large batches.
+    /// Files are read inside the workers, so memory stays bounded by one
+    /// file per worker thread no matter how many paths are given. With the
+    /// `parallel` feature (default) files are processed across rayon
+    /// workers; without it, sequentially. Prefer this over
+    /// [`fingerprint_batch`](Self::fingerprint_batch) for directory-scale
+    /// jobs, and over [`fingerprint_stream`](Self::fingerprint_stream) when
+    /// you want all cores busy.
     ///
-    /// # Arguments
-    /// * `images` - Slice of (id, image_bytes) pairs
-    /// * `chunk_size` - Number of images to process per chunk
-    /// * `callback` - Function called with each result as (id, Result<...>)
-    pub fn fingerprint_batch_chunked<S, F>(images: &[(S, Vec<u8>)], chunk_size: usize, callback: F)
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use imgfprint::ImageFingerprinter;
+    ///
+    /// let paths: Vec<_> = std::fs::read_dir("photos")?
+    ///     .filter_map(|entry| entry.ok().map(|e| e.path()))
+    ///     .collect();
+    /// for (path, result) in ImageFingerprinter::fingerprint_paths(paths) {
+    ///     match result {
+    ///         Ok(fp) => println!("{}: {fp}", path.display()),
+    ///         Err(e) => eprintln!("{}: {e}", path.display()),
+    ///     }
+    /// }
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn fingerprint_paths<I, P>(
+        paths: I,
+    ) -> Vec<(P, Result<MultiHashFingerprint, ImgFprintError>)>
     where
-        S: Send + Sync + Clone + 'static,
-        F: FnMut(S, Result<MultiHashFingerprint, ImgFprintError>),
+        I: IntoIterator<Item = P>,
+        P: AsRef<Path> + Send,
     {
-        let mut ctx = FingerprinterContext::new();
-        ctx.fingerprint_batch_chunked(images, chunk_size, callback);
+        run_batch(paths.into_iter().collect(), "paths", |ctx, path: P| {
+            let result = ctx.fingerprint_path(path.as_ref());
+            (path, result)
+        })
     }
 
-    /// Processes an iterator of file paths, yielding fingerprint results lazily.
+    /// Lazily fingerprints paths one at a time on the calling thread.
     ///
-    /// Unlike [`fingerprint_batch`](Self::fingerprint_batch), this does not require
-    /// loading all images into memory at once. Each path is read and fingerprinted
-    /// on demand.
+    /// Only one file is in memory at a time. For parallel processing use
+    /// [`fingerprint_paths`](Self::fingerprint_paths).
     ///
     /// # Example
     ///
@@ -963,7 +856,7 @@ impl ImageFingerprinter {
     /// use std::path::PathBuf;
     ///
     /// let paths = vec![PathBuf::from("a.jpg"), PathBuf::from("b.png")];
-    /// for (path, result) in ImageFingerprinter::fingerprint_stream(paths.into_iter()) {
+    /// for (path, result) in ImageFingerprinter::fingerprint_stream(paths) {
     ///     match result {
     ///         Ok(fp) => println!("{}: {}", path.display(), fp),
     ///         Err(e) => eprintln!("{}: {}", path.display(), e),
@@ -974,14 +867,110 @@ impl ImageFingerprinter {
         paths: I,
     ) -> impl Iterator<Item = (P, Result<MultiHashFingerprint, ImgFprintError>)>
     where
-        I: Iterator<Item = P>,
+        I: IntoIterator<Item = P>,
         P: AsRef<Path>,
     {
         let mut ctx = FingerprinterContext::new();
-        paths.map(move |p| {
+        paths.into_iter().map(move |p| {
             let result = ctx.fingerprint_path(p.as_ref());
             (p, result)
         })
+    }
+
+    /// Fingerprints with a one-off [`PreprocessConfig`].
+    #[deprecated(
+        since = "0.4.7",
+        note = "use `FingerprinterContext::with_config(config).fingerprint(bytes)`"
+    )]
+    pub fn fingerprint_with_preprocess(
+        image_bytes: &[u8],
+        preprocess: &PreprocessConfig,
+    ) -> Result<MultiHashFingerprint, ImgFprintError> {
+        with_shared_ctx(|ctx| ctx.compute_all_hashes(image_bytes, preprocess))
+    }
+
+    /// Fingerprints a file with a one-off [`PreprocessConfig`].
+    #[deprecated(
+        since = "0.4.7",
+        note = "use `FingerprinterContext::with_config(config).fingerprint_path(path)`"
+    )]
+    pub fn fingerprint_path_with_preprocess<P: AsRef<Path>>(
+        path: P,
+        preprocess: &PreprocessConfig,
+    ) -> Result<MultiHashFingerprint, ImgFprintError> {
+        let bytes = read_image_file(path.as_ref(), preprocess)?;
+        with_shared_ctx(|ctx| ctx.compute_all_hashes(&bytes, preprocess))
+    }
+
+    /// Fingerprints a decoded image with a one-off [`PreprocessConfig`].
+    #[deprecated(
+        since = "0.4.7",
+        note = "use `FingerprinterContext::with_config(config).fingerprint_image(image)`"
+    )]
+    pub fn fingerprint_image_with_preprocess(
+        image: &DynamicImage,
+        preprocess: &PreprocessConfig,
+    ) -> Result<MultiHashFingerprint, ImgFprintError> {
+        with_shared_ctx(|ctx| ctx.compute_image_hashes(image, preprocess))
+    }
+
+    /// Single-algorithm fingerprint using a bilinear resize for AHash/DHash.
+    ///
+    /// Output is **not** bit-compatible with any other entry point.
+    #[deprecated(
+        since = "0.4.7",
+        note = "bit-incompatible with every other entry point for a small end-to-end gain (decode dominates); use `fingerprint_with`"
+    )]
+    pub fn fingerprint_with_fast(
+        image_bytes: &[u8],
+        algorithm: HashAlgorithm,
+    ) -> Result<ImageFingerprint, ImgFprintError> {
+        with_shared_ctx(|ctx| {
+            let config = ctx.config;
+            ctx.compute_single_hash(image_bytes, algorithm, &config, true)
+        })
+    }
+
+    /// Compares two single-algorithm fingerprints.
+    #[deprecated(since = "0.4.7", note = "use `a.compare(&b)`")]
+    #[must_use]
+    pub fn compare(a: &ImageFingerprint, b: &ImageFingerprint) -> similarity::Similarity {
+        similarity::compute_similarity(a, b)
+    }
+
+    /// Generates a semantic embedding via `provider`.
+    #[deprecated(since = "0.4.7", note = "call `provider.embed(image)` directly")]
+    pub fn semantic_embedding<P: crate::embed::EmbeddingProvider>(
+        provider: &P,
+        image: &[u8],
+    ) -> Result<crate::embed::Embedding, ImgFprintError> {
+        provider.embed(image)
+    }
+
+    /// Cosine similarity of two embeddings.
+    #[deprecated(
+        since = "0.4.7",
+        note = "use the free function `imgfprint::semantic_similarity`"
+    )]
+    pub fn semantic_similarity(
+        a: &crate::embed::Embedding,
+        b: &crate::embed::Embedding,
+    ) -> Result<f32, ImgFprintError> {
+        crate::embed::semantic_similarity(a, b)
+    }
+
+    /// Fingerprints `images` and invokes `callback` for each result in input
+    /// order.
+    #[deprecated(
+        since = "0.4.7",
+        note = "the inputs are already in memory, so chunking bounds nothing; use `fingerprint_batch`, or `fingerprint_paths` for bounded memory"
+    )]
+    pub fn fingerprint_batch_chunked<S, F>(images: &[(S, Vec<u8>)], chunk_size: usize, callback: F)
+    where
+        S: Send + Sync + Clone + 'static,
+        F: FnMut(S, Result<MultiHashFingerprint, ImgFprintError>),
+    {
+        batch_chunked(images, chunk_size, callback);
     }
 }
 
@@ -1004,6 +993,32 @@ mod tests {
     fn test_fingerprinter_context_new() {
         let ctx = FingerprinterContext::new();
         let _ = ctx;
+    }
+
+    #[test]
+    fn shared_context_survives_reentrancy() {
+        // A nested borrow (what rayon work-stealing used to trigger inside
+        // the old per-image `rayon::join`) must fall back, not panic.
+        let img = create_test_image(64, 64);
+        let (outer, inner) = with_shared_ctx(|ctx| {
+            let inner = ImageFingerprinter::fingerprint(&img).unwrap();
+            (ctx.fingerprint(&img).unwrap(), inner)
+        });
+        assert_eq!(outer, inner);
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn static_api_is_safe_inside_rayon_workers() {
+        use rayon::prelude::*;
+        // Regression: 0.4.6 panicked with "RefCell already borrowed" here.
+        let img = create_test_image(96, 96);
+        let expected = ImageFingerprinter::fingerprint(&img).unwrap();
+        let all: Vec<_> = (0..128)
+            .into_par_iter()
+            .map(|_| ImageFingerprinter::fingerprint(&img).unwrap())
+            .collect();
+        assert!(all.iter().all(|fp| *fp == expected));
     }
 
     #[test]
@@ -1143,6 +1158,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // covers the deprecated shim until removal
     fn test_fingerprinter_batch_chunked_empty() {
         let images: Vec<(usize, Vec<u8>)> = vec![];
         let mut results = Vec::new();
@@ -1155,6 +1171,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // covers the deprecated shim until removal
     fn test_fingerprinter_batch_chunked_single() {
         let img = create_test_image(100, 100);
         let images = vec![(0, img)];
@@ -1169,6 +1186,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // covers the deprecated shim until removal
     fn test_fingerprinter_batch_chunked_multiple() {
         let images: Vec<(usize, Vec<u8>)> = (0..10usize)
             .map(|i| (i, create_test_image(100, 100)))
@@ -1187,6 +1205,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // covers the deprecated shim until removal
     fn test_fingerprinter_batch_chunked_chunk_size_one() {
         let images: Vec<(usize, Vec<u8>)> = (0..5usize)
             .map(|i| (i, create_test_image(100, 100)))
@@ -1201,6 +1220,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // covers the deprecated shim until removal
     fn test_fingerprinter_batch_chunked_chunk_size_zero() {
         let images: Vec<(usize, Vec<u8>)> = (0..5usize)
             .map(|i| (i, create_test_image(100, 100)))
@@ -1215,6 +1235,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // covers the deprecated shim until removal
     fn test_fingerprinter_batch_chunked_large_chunk_size() {
         let images: Vec<(usize, Vec<u8>)> = (0..5usize)
             .map(|i| (i, create_test_image(100, 100)))
@@ -1229,6 +1250,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // covers the deprecated shim until removal
     fn test_fingerprinter_context_batch_chunked() {
         let mut ctx = FingerprinterContext::new();
         let images: Vec<(usize, Vec<u8>)> = (0..5usize)
@@ -1297,7 +1319,7 @@ mod tests {
         let fp1 = ImageFingerprinter::fingerprint_with(&img1, HashAlgorithm::PHash).unwrap();
         let fp2 = ImageFingerprinter::fingerprint_with(&img2, HashAlgorithm::PHash).unwrap();
 
-        let sim = ImageFingerprinter::compare(&fp1, &fp2);
+        let sim = fp1.compare(&fp2);
         assert!(sim.score >= 0.0 && sim.score <= 1.0);
     }
 
@@ -1381,8 +1403,13 @@ mod tests {
             max_input_bytes: 1024,
             ..PreprocessConfig::default()
         };
-        let err = ImageFingerprinter::fingerprint_path_with_preprocess(&path, &tight).unwrap_err();
+        let err = FingerprinterContext::with_config(tight)
+            .fingerprint_path(&path)
+            .unwrap_err();
         assert!(matches!(err, ImgFprintError::IoError(_)), "got: {:?}", err);
+        #[allow(deprecated)]
+        let legacy = ImageFingerprinter::fingerprint_path_with_preprocess(&path, &tight);
+        assert!(matches!(legacy, Err(ImgFprintError::IoError(_))));
 
         let _ = std::fs::remove_file(&path);
     }
@@ -1422,7 +1449,7 @@ mod tests {
         std::fs::write(&p2, &img).unwrap();
 
         let paths = vec![p1.clone(), p2.clone()];
-        let results: Vec<_> = ImageFingerprinter::fingerprint_stream(paths.into_iter()).collect();
+        let results: Vec<_> = ImageFingerprinter::fingerprint_stream(paths).collect();
 
         assert_eq!(results.len(), 2);
         assert!(results[0].1.is_ok());
@@ -1440,7 +1467,7 @@ mod tests {
     #[test]
     fn test_fingerprint_stream_missing_file() {
         let paths = vec![std::path::PathBuf::from("/nonexistent_imgfprint_xyz.png")];
-        let results: Vec<_> = ImageFingerprinter::fingerprint_stream(paths.into_iter()).collect();
+        let results: Vec<_> = ImageFingerprinter::fingerprint_stream(paths).collect();
         assert_eq!(results.len(), 1);
         assert!(results[0].1.is_err());
     }

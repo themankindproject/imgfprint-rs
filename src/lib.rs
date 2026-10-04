@@ -171,7 +171,7 @@ mod tests {
         let img = create_test_image();
         let fp1 = ImageFingerprinter::fingerprint_with(&img, HashAlgorithm::PHash).unwrap();
         let fp2 = ImageFingerprinter::fingerprint_with(&img, HashAlgorithm::PHash).unwrap();
-        let sim = ImageFingerprinter::compare(&fp1, &fp2);
+        let sim = fp1.compare(&fp2);
 
         assert!(sim.exact_match);
         assert_eq!(sim.score, 1.0);
@@ -228,7 +228,7 @@ mod tests {
 
         let fp1 = ImageFingerprinter::fingerprint_with(&buf1, HashAlgorithm::PHash).unwrap();
         let fp2 = ImageFingerprinter::fingerprint_with(&buf2, HashAlgorithm::PHash).unwrap();
-        let sim = ImageFingerprinter::compare(&fp1, &fp2);
+        let sim = fp1.compare(&fp2);
 
         assert!(!sim.exact_match);
         assert!(sim.score > 0.5, "Similar images: got {}", sim.score);

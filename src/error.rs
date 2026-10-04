@@ -20,24 +20,24 @@ pub enum ImgFprintError {
     #[error("decode failed: {0}")]
     DecodeError(String),
 
-    /// Image data is invalid or dimensions exceed limits (8192x8192 max).
+    /// Image data is invalid or exceeds the configured limits.
     ///
     /// ## Errors
     /// This error occurs when:
-    /// - Image dimensions exceed 8192x8192 pixels
-    /// - Image dimensions are reported as zero or negative
-    /// - The image header contains invalid values
-    /// - Color type conversion fails
+    /// - The input is empty or larger than `PreprocessConfig::max_input_bytes`
+    /// - An edge exceeds `PreprocessConfig::max_dimension` (default 8192 px)
+    /// - The decoder's allocation limit is exceeded (decompression bomb guard)
+    /// - The `PreprocessConfig` itself is inconsistent (`min_dimension > max_dimension`)
     #[error("invalid image: {0}")]
     InvalidImage(String),
 
-    /// Image format is not supported (supported: PNG, JPEG, GIF, WebP, BMP).
+    /// Image format is not supported or could not be detected.
     ///
-    /// ## Errors
-    /// This error occurs when:
-    /// - The file extension or magic bytes don't match a supported format
-    /// - A specific variant of a format is not supported (e.g., JPEG 2000)
-    /// - The image uses an unsupported color space
+    /// PNG, JPEG, GIF, WebP, and BMP are always supported; TIFF, ICO, PNM,
+    /// and QOI are behind the crate features of the same names.
+    ///
+    /// TGA is intentionally unsupported: it carries no magic bytes, so the
+    /// byte-sniffing decode path cannot identify it.
     #[error("unsupported format: {0}")]
     UnsupportedFormat(String),
 
@@ -54,9 +54,8 @@ pub enum ImgFprintError {
     /// Image dimensions are too small for fingerprinting.
     ///
     /// ## Errors
-    /// This error occurs when:
-    /// - Either dimension is less than 8 pixels
-    /// - The image cannot be resized to the minimum 8x8 required for hashing
+    /// This error occurs when either edge is below
+    /// `PreprocessConfig::min_dimension` (default 32 px).
     #[error("image dimensions too small: {0}")]
     ImageTooSmall(String),
 
@@ -100,7 +99,8 @@ pub enum ImgFprintError {
     /// ## Errors
     /// This error occurs when:
     /// - The path passed to [`fingerprint_path`](crate::ImageFingerprinter::fingerprint_path) does not exist or is unreadable
-    /// - File metadata reports a size larger than the 50 MB input limit
+    /// - The file is larger than `PreprocessConfig::max_input_bytes`
+    ///   (default 50 MiB), detected from metadata or while reading
     /// - The underlying read fails partway through
     #[error("io error: {0}")]
     IoError(String),
@@ -114,6 +114,16 @@ pub enum ImgFprintError {
     /// - A block distance threshold is outside the valid 0–64 range
     #[error("invalid config: {0}")]
     InvalidConfig(String),
+
+    /// Encoded fingerprint bytes could not be decoded.
+    ///
+    /// ## Errors
+    /// Returned by `ImageFingerprint::from_bytes` and
+    /// `MultiHashFingerprint::from_bytes` when the input has the wrong
+    /// length, magic bytes, or kind, or was written under a different
+    /// [`FORMAT_VERSION`](crate::FORMAT_VERSION) (recompute it in that case).
+    #[error("invalid fingerprint encoding: {0}")]
+    InvalidFingerprint(String),
 }
 
 impl From<std::io::Error> for ImgFprintError {

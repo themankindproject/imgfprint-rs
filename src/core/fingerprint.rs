@@ -1,4 +1,5 @@
 use crate::core::similarity::Similarity;
+use crate::error::ImgFprintError;
 use crate::hash::algorithms::HashAlgorithm;
 
 /// Writes a byte slice as lowercase hex.
@@ -9,13 +10,65 @@ fn write_hex(f: &mut core::fmt::Formatter<'_>, bytes: &[u8]) -> core::fmt::Resul
     Ok(())
 }
 
-/// Debug-asserts the threshold range, then clamps for release builds.
-fn check_threshold(threshold: f32) -> f32 {
-    debug_assert!(
-        (0.0..=1.0).contains(&threshold),
-        "threshold must be in range [0.0, 1.0], got {threshold}"
-    );
-    threshold.clamp(0.0, 1.0)
+/// `score >= threshold` for a threshold in `[0.0, 1.0]`; any other threshold
+/// (negative, above 1.0, NaN) never matches.
+#[inline]
+fn meets_threshold(score: f32, threshold: f32) -> bool {
+    (0.0..=1.0).contains(&threshold) && score >= threshold
+}
+
+/// Magic prefix of the [`ImageFingerprint::to_bytes`] /
+/// [`MultiHashFingerprint::to_bytes`] encodings.
+const CODEC_MAGIC: [u8; 2] = *b"IF";
+/// Codec kind byte: single-algorithm [`ImageFingerprint`].
+const CODEC_KIND_SINGLE: u8 = 1;
+/// Codec kind byte: [`MultiHashFingerprint`].
+const CODEC_KIND_MULTI: u8 = 3;
+/// Header length: magic (2) + format version (1) + kind (1).
+const CODEC_HEADER_LEN: usize = 4;
+/// Encoded payload of one [`ImageFingerprint`]: exact (32) + global (8) + 16 blocks (128).
+const SINGLE_PAYLOAD_LEN: usize = 32 + 8 + 16 * 8;
+
+fn codec_header(kind: u8) -> [u8; CODEC_HEADER_LEN] {
+    #[allow(clippy::cast_possible_truncation)] // asserted below: FORMAT_VERSION fits in u8
+    let version = crate::FORMAT_VERSION as u8;
+    [CODEC_MAGIC[0], CODEC_MAGIC[1], version, kind]
+}
+
+const _: () = assert!(crate::FORMAT_VERSION <= u8::MAX as u32);
+
+/// Validates length, magic, version, and kind; returns the payload.
+fn check_codec_header<'a>(
+    bytes: &'a [u8],
+    kind: u8,
+    expected_len: usize,
+    type_name: &str,
+) -> Result<&'a [u8], ImgFprintError> {
+    if bytes.len() != expected_len {
+        return Err(ImgFprintError::InvalidFingerprint(format!(
+            "{type_name} encoding must be {expected_len} bytes, got {}",
+            bytes.len()
+        )));
+    }
+    if bytes[..2] != CODEC_MAGIC {
+        return Err(ImgFprintError::InvalidFingerprint(
+            "missing imgfprint magic bytes".to_string(),
+        ));
+    }
+    if u32::from(bytes[2]) != crate::FORMAT_VERSION {
+        return Err(ImgFprintError::InvalidFingerprint(format!(
+            "format version {} is not supported (this build reads version {}); recompute the fingerprint",
+            bytes[2],
+            crate::FORMAT_VERSION
+        )));
+    }
+    if bytes[3] != kind {
+        return Err(ImgFprintError::InvalidFingerprint(format!(
+            "encoding holds kind {}, not a {type_name}",
+            bytes[3]
+        )));
+    }
+    Ok(&bytes[CODEC_HEADER_LEN..])
 }
 
 /// Default weight for `AHash` in the combined score (10%).
@@ -229,6 +282,9 @@ pub struct ImageFingerprint {
 }
 
 impl ImageFingerprint {
+    /// Length of [`to_bytes`](Self::to_bytes) output: 4-byte header + 168-byte payload.
+    pub const ENCODED_LEN: usize = CODEC_HEADER_LEN + SINGLE_PAYLOAD_LEN;
+
     #[inline]
     pub(crate) fn new(exact: [u8; 32], global_hash: u64, block_hashes: [u64; 16]) -> Self {
         Self {
@@ -238,10 +294,14 @@ impl ImageFingerprint {
         }
     }
 
-    /// Returns the BLAKE3 hash of the original image bytes.
+    /// Returns the BLAKE3 exact-match hash.
     ///
-    /// Two images with identical byte content will have matching exact hashes.
-    /// Use this for exact deduplication before perceptual comparison.
+    /// Covers the raw input bytes for byte entry points and the RGB8 pixels
+    /// for [`ImageFingerprinter::fingerprint_image`]. Equal exact hashes mean
+    /// identical input; use it for exact deduplication before perceptual
+    /// comparison.
+    ///
+    /// [`ImageFingerprinter::fingerprint_image`]: crate::ImageFingerprinter::fingerprint_image
     #[inline]
     #[must_use]
     pub fn exact_hash(&self) -> &[u8; 32] {
@@ -249,21 +309,17 @@ impl ImageFingerprint {
     }
 
     /// Returns the on-disk format version this fingerprint was computed under.
-    ///
-    /// Equal to [`crate::FORMAT_VERSION`]. Persist alongside fingerprint bytes
-    /// (or in a sidecar manifest) and refuse comparison across mismatched
-    /// versions to guard against algorithm-version drift.
+    #[deprecated(since = "0.4.7", note = "use the `imgfprint::FORMAT_VERSION` constant")]
     #[inline]
     #[must_use]
     pub const fn format_version() -> u32 {
         crate::FORMAT_VERSION
     }
 
-    /// Returns the global perceptual hash from the center 32x32 region.
+    /// Returns the global perceptual hash of the center 32x32 region.
     ///
-    /// This hash captures the overall structure of the image and is robust
-    /// to minor changes in compression and color adjustments. The algorithm
-    /// used (`PHash` or `DHash`) depends on which was specified when creating the fingerprint.
+    /// Captures the overall structure of the image; which algorithm produced
+    /// it depends on how the fingerprint was created.
     #[inline]
     #[must_use]
     pub fn global_hash(&self) -> u64 {
@@ -335,35 +391,99 @@ impl ImageFingerprint {
         (self.global_hash ^ other.global_hash).count_ones()
     }
 
-    /// Checks if this fingerprint is similar to another within a threshold.
+    /// Compares two single-algorithm fingerprints.
     ///
-    /// # Arguments
-    /// * `other` - The fingerprint to compare against
-    /// * `threshold` - Similarity threshold from 0.0 to 1.0 (default: 0.8)
+    /// The score blends 40% global-hash similarity with 60% block similarity
+    /// (blocks farther than 32 bits apart are ignored); an exact-hash match
+    /// scores `1.0`. Only compare fingerprints made with the same algorithm.
+    #[must_use]
+    pub fn compare(&self, other: &ImageFingerprint) -> Similarity {
+        crate::core::similarity::compute_similarity(self, other)
+    }
+
+    /// Returns `true` if [`compare`](Self::compare) scores at least
+    /// `threshold`.
     ///
-    /// # Panics
-    /// Panics in debug mode if threshold is not in [0.0, 1.0].
-    /// In release mode, out-of-range or NaN thresholds return false (never similar).
-    ///
-    /// # Example
-    /// ```ignore
-    /// // Use ImageFingerprinter::fingerprint() to create fingerprints first
-    /// use imgfprint::ImageFingerprinter;
-    ///
-    /// let fp1 = ImageFingerprinter::fingerprint(&std::fs::read("image1.jpg")?).unwrap();
-    /// let fp2 = ImageFingerprinter::fingerprint(&std::fs::read("image2.jpg")?).unwrap();
-    ///
-    /// if fp1.is_similar(&fp2, 0.8) {
-    ///     println!("Images are similar!");
-    /// }
-    /// ```
-    #[doc(alias = "compare")]
+    /// `threshold` must lie in `[0.0, 1.0]`; any other value (negative,
+    /// above 1.0, NaN) returns `false`.
     #[doc(alias = "match")]
     #[must_use]
     pub fn is_similar(&self, other: &ImageFingerprint, threshold: f32) -> bool {
-        let clamped_threshold = check_threshold(threshold);
-        let sim = crate::core::similarity::compute_similarity(self, other);
-        sim.score >= clamped_threshold
+        meets_threshold(self.compare(other).score, threshold)
+    }
+
+    /// Encodes the fingerprint as a compact, versioned, endian-independent
+    /// byte string for storage or transport (database column, cache, RPC).
+    ///
+    /// Layout: `b"IF"`, [`FORMAT_VERSION`](crate::FORMAT_VERSION) (1 byte),
+    /// kind (1 byte), then the exact hash and the 17 hashes as little-endian
+    /// `u64`s. [`from_bytes`](Self::from_bytes) is the exact inverse.
+    ///
+    /// ```rust
+    /// # use imgfprint::{ImageFingerprinter, HashAlgorithm, ImageFingerprint};
+    /// # let png = {
+    /// #     let img = image::RgbImage::from_fn(64, 64, |x, y| image::Rgb([x as u8, y as u8, 7]));
+    /// #     let mut buf = Vec::new();
+    /// #     img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png).unwrap();
+    /// #     buf
+    /// # };
+    /// let fp = ImageFingerprinter::fingerprint_with(&png, HashAlgorithm::PHash)?;
+    /// let stored: [u8; ImageFingerprint::ENCODED_LEN] = fp.to_bytes();
+    /// assert_eq!(ImageFingerprint::from_bytes(&stored)?, fp);
+    /// # Ok::<(), imgfprint::ImgFprintError>(())
+    /// ```
+    #[must_use]
+    pub fn to_bytes(&self) -> [u8; Self::ENCODED_LEN] {
+        let mut out = [0u8; Self::ENCODED_LEN];
+        out[..CODEC_HEADER_LEN].copy_from_slice(&codec_header(CODEC_KIND_SINGLE));
+        self.write_payload(&mut out[CODEC_HEADER_LEN..]);
+        out
+    }
+
+    /// Decodes bytes produced by [`to_bytes`](Self::to_bytes).
+    ///
+    /// # Errors
+    ///
+    /// [`ImgFprintError::InvalidFingerprint`] if the length, magic bytes,
+    /// kind, or format version do not match. A version mismatch means the
+    /// fingerprint was computed by an incompatible algorithm revision and
+    /// must be recomputed rather than compared.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ImgFprintError> {
+        let payload = check_codec_header(
+            bytes,
+            CODEC_KIND_SINGLE,
+            Self::ENCODED_LEN,
+            "ImageFingerprint",
+        )?;
+        Ok(Self::read_payload(payload))
+    }
+
+    /// Writes the 168-byte little-endian payload into `out`.
+    fn write_payload(&self, out: &mut [u8]) {
+        out[..32].copy_from_slice(&self.exact);
+        out[32..40].copy_from_slice(&self.global_hash.to_le_bytes());
+        for (dst, hash) in out[40..SINGLE_PAYLOAD_LEN]
+            .chunks_exact_mut(8)
+            .zip(&self.block_hashes)
+        {
+            dst.copy_from_slice(&hash.to_le_bytes());
+        }
+    }
+
+    /// Reads a 168-byte little-endian payload (length checked by the caller).
+    fn read_payload(payload: &[u8]) -> Self {
+        let u64_at = |offset: usize| {
+            let mut word = [0u8; 8];
+            word.copy_from_slice(&payload[offset..offset + 8]);
+            u64::from_le_bytes(word)
+        };
+        let mut exact = [0u8; 32];
+        exact.copy_from_slice(&payload[..32]);
+        Self {
+            exact,
+            global_hash: u64_at(32),
+            block_hashes: core::array::from_fn(|i| u64_at(40 + i * 8)),
+        }
     }
 }
 
@@ -435,6 +555,9 @@ const _: () = {
 };
 
 impl MultiHashFingerprint {
+    /// Length of [`to_bytes`](Self::to_bytes) output: 4-byte header + 536-byte payload.
+    pub const ENCODED_LEN: usize = CODEC_HEADER_LEN + 32 + 3 * SINGLE_PAYLOAD_LEN;
+
     pub(crate) fn new(
         exact: [u8; 32],
         ahash: ImageFingerprint,
@@ -449,7 +572,7 @@ impl MultiHashFingerprint {
         }
     }
 
-    /// Returns the BLAKE3 hash of the original image bytes.
+    /// Returns the BLAKE3 exact-match hash (see [`ImageFingerprint::exact_hash`]).
     #[inline]
     #[must_use]
     pub fn exact_hash(&self) -> &[u8; 32] {
@@ -457,10 +580,7 @@ impl MultiHashFingerprint {
     }
 
     /// Returns the on-disk format version this fingerprint was computed under.
-    ///
-    /// Equal to [`crate::FORMAT_VERSION`]. Persist alongside fingerprint bytes
-    /// (or in a sidecar manifest) and refuse comparison across mismatched
-    /// versions to guard against algorithm-version drift.
+    #[deprecated(since = "0.4.7", note = "use the `imgfprint::FORMAT_VERSION` constant")]
     #[inline]
     #[must_use]
     pub const fn format_version() -> u32 {
@@ -506,18 +626,19 @@ impl MultiHashFingerprint {
     /// - Within each algorithm, 40% global hash + 60% block-level hashes
     /// - Block distance threshold of 32 (Hamming, out of 64)
     ///
-    /// Use [`compare_with_config`](Self::compare_with_config) to tune any of these.
+    /// Scores of unrelated images cluster around 0.55 (two independent 64-bit
+    /// hashes differ in ~32 bits), so thresholds are best chosen from the
+    /// measured guidance in the crate docs: ~0.85 for near-duplicates.
     #[must_use]
     pub fn compare(&self, other: &MultiHashFingerprint) -> Similarity {
-        self.compare_with_threshold(other, 32)
+        self.compare_with_config(other, &MultiHashConfig::default())
     }
 
     /// Compares two multi-hash fingerprints with a custom block distance threshold.
-    ///
-    /// # Arguments
-    /// * `other` - The fingerprint to compare against
-    /// * `block_threshold` - Maximum Hamming distance for a block to count as a match (0-64).
-    ///   Lower = stricter (fewer blocks qualify), higher = looser. Default is 32.
+    #[deprecated(
+        since = "0.4.7",
+        note = "use `compare_with_config(other, &MultiHashConfig { block_distance_threshold, ..Default::default() })`"
+    )]
     #[must_use]
     pub fn compare_with_threshold(
         &self,
@@ -549,11 +670,8 @@ impl MultiHashFingerprint {
         config: &MultiHashConfig,
     ) -> Similarity {
         use crate::core::similarity::{compute_score_only, hamming_distance};
-        use subtle::ConstantTimeEq;
 
-        let exact_match = self.exact.ct_eq(&other.exact).into();
-
-        if exact_match {
+        if self.exact == other.exact {
             return Similarity {
                 score: 1.0,
                 exact_match: true,
@@ -618,17 +736,79 @@ impl MultiHashFingerprint {
         }
     }
 
-    /// Checks if this fingerprint is similar to another within a threshold.
+    /// Returns `true` if [`compare`](Self::compare) scores at least
+    /// `threshold`.
     ///
-    /// Uses the weighted combination score from compare().
-    ///
-    /// # Panics
-    /// Panics in debug mode if threshold is not in [0.0, 1.0].
-    /// In release mode, out-of-range or NaN thresholds return false.
+    /// `threshold` must lie in `[0.0, 1.0]`; any other value (negative,
+    /// above 1.0, NaN) returns `false`. See the crate-level docs for measured
+    /// threshold guidance (~0.85 catches re-encodes, resizes, and small edits
+    /// while keeping unrelated images out).
     #[must_use]
     pub fn is_similar(&self, other: &MultiHashFingerprint, threshold: f32) -> bool {
-        let clamped_threshold = check_threshold(threshold);
-        self.compare(other).score >= clamped_threshold
+        meets_threshold(self.compare(other).score, threshold)
+    }
+
+    /// Encodes the fingerprint as a compact, versioned, endian-independent
+    /// byte string for storage or transport (database column, cache, RPC).
+    ///
+    /// Layout: `b"IF"`, [`FORMAT_VERSION`](crate::FORMAT_VERSION) (1 byte),
+    /// kind (1 byte), the exact hash, then the AHash, PHash, and DHash layers
+    /// (each: exact hash + 17 little-endian `u64`s).
+    /// [`from_bytes`](Self::from_bytes) is the exact inverse.
+    ///
+    /// Unlike a raw [`bytemuck`] cast this is portable across endianness and
+    /// carries its format version, so stale fingerprints are rejected instead
+    /// of silently mis-compared after an algorithm change.
+    ///
+    /// ```rust
+    /// # use imgfprint::{ImageFingerprinter, MultiHashFingerprint};
+    /// # let png = {
+    /// #     let img = image::RgbImage::from_fn(64, 64, |x, y| image::Rgb([x as u8, y as u8, 7]));
+    /// #     let mut buf = Vec::new();
+    /// #     img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png).unwrap();
+    /// #     buf
+    /// # };
+    /// let fp = ImageFingerprinter::fingerprint(&png)?;
+    /// let stored = fp.to_bytes(); // [u8; MultiHashFingerprint::ENCODED_LEN]
+    /// assert_eq!(MultiHashFingerprint::from_bytes(&stored)?, fp);
+    /// # Ok::<(), imgfprint::ImgFprintError>(())
+    /// ```
+    #[must_use]
+    pub fn to_bytes(&self) -> [u8; Self::ENCODED_LEN] {
+        let mut out = [0u8; Self::ENCODED_LEN];
+        out[..CODEC_HEADER_LEN].copy_from_slice(&codec_header(CODEC_KIND_MULTI));
+        out[CODEC_HEADER_LEN..CODEC_HEADER_LEN + 32].copy_from_slice(&self.exact);
+        let layers = &mut out[CODEC_HEADER_LEN + 32..];
+        for (dst, layer) in
+            layers
+                .chunks_exact_mut(SINGLE_PAYLOAD_LEN)
+                .zip([&self.ahash, &self.phash, &self.dhash])
+        {
+            layer.write_payload(dst);
+        }
+        out
+    }
+
+    /// Decodes bytes produced by [`to_bytes`](Self::to_bytes).
+    ///
+    /// # Errors
+    ///
+    /// [`ImgFprintError::InvalidFingerprint`] if the length, magic bytes,
+    /// kind, or format version do not match.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ImgFprintError> {
+        let payload = check_codec_header(
+            bytes,
+            CODEC_KIND_MULTI,
+            Self::ENCODED_LEN,
+            "MultiHashFingerprint",
+        )?;
+        let mut exact = [0u8; 32];
+        exact.copy_from_slice(&payload[..32]);
+        let layer = |i: usize| {
+            let start = 32 + i * SINGLE_PAYLOAD_LEN;
+            ImageFingerprint::read_payload(&payload[start..start + SINGLE_PAYLOAD_LEN])
+        };
+        Ok(Self::new(exact, layer(0), layer(1), layer(2)))
     }
 }
 
@@ -738,6 +918,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // pins the deprecated shim until removal
     fn format_version_is_one() {
         assert_eq!(crate::FORMAT_VERSION, 1);
         assert_eq!(ImageFingerprint::format_version(), 1);
