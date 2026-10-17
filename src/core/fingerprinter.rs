@@ -18,17 +18,22 @@ use std::path::Path;
 #[cfg(feature = "tracing")]
 use std::time::Instant;
 
-/// Reads a file into memory, never buffering more than
-/// `config.max_input_bytes + 1` bytes.
+/// Reads a file into `bytes` (reusing its allocation), never buffering more
+/// than `config.max_input_bytes + 1` bytes.
 ///
 /// The size reported by metadata is only a fast-path rejection: special files
 /// (`/dev/zero`, FIFOs, procfs entries) report a length of 0 while yielding
 /// unbounded data, so the read itself is capped with [`Read::take`].
 ///
 /// [`Read::take`]: std::io::Read::take
-fn read_image_file(path: &Path, config: &PreprocessConfig) -> Result<Vec<u8>, ImgFprintError> {
+fn read_image_file_into(
+    path: &Path,
+    config: &PreprocessConfig,
+    bytes: &mut Vec<u8>,
+) -> Result<(), ImgFprintError> {
     use std::io::Read;
 
+    bytes.clear();
     let max = config.max_input_bytes as u64;
     let too_large = |size: u64| {
         ImgFprintError::IoError(format!(
@@ -43,13 +48,22 @@ fn read_image_file(path: &Path, config: &PreprocessConfig) -> Result<Vec<u8>, Im
     }
 
     // `reported` is only a hint (0 for special files); cap the pre-allocation
-    // so a lying size can never trigger a large up-front reservation.
+    // so a lying size can never trigger a large up-front reservation. Reused
+    // buffers keep their high-water capacity across calls.
     #[allow(clippy::cast_possible_truncation)] // reported <= max_input_bytes: usize
-    let mut bytes = Vec::with_capacity(reported as usize);
-    file.take(max.saturating_add(1)).read_to_end(&mut bytes)?;
+    bytes.reserve(reported as usize);
+    file.take(max.saturating_add(1)).read_to_end(bytes)?;
     if bytes.len() as u64 > max {
         return Err(too_large(bytes.len() as u64));
     }
+    Ok(())
+}
+
+/// Reads a file into a fresh buffer. Thin wrapper over
+/// [`read_image_file_into`] for callers without a reusable buffer.
+fn read_image_file(path: &Path, config: &PreprocessConfig) -> Result<Vec<u8>, ImgFprintError> {
+    let mut bytes = Vec::new();
+    read_image_file_into(path, config, &mut bytes)?;
     Ok(bytes)
 }
 
@@ -79,6 +93,25 @@ fn zeroed_blocks() -> Box<[[f32; 64 * 64]; 16]> {
         .into_boxed_slice()
         .try_into()
         .unwrap_or_else(|_| unreachable!("vec! built exactly 16 blocks"))
+}
+
+/// Minimum input size for BLAKE3's parallel code path. Below this threshold
+/// the thread-pool overhead outweighs the parallel gain, so small inputs
+/// (including every Luma8/RGBA8 conversion chunk) stay on the serial path.
+#[cfg(feature = "parallel")]
+const EXACT_HASH_PARALLEL_MIN_BYTES: usize = 1 << 20;
+
+/// Feeds `bytes` into `hasher`, using BLAKE3's rayon path for large inputs.
+///
+/// The digest is identical either way (BLAKE3 output does not depend on how
+/// the work is scheduled); only the number of threads doing it changes.
+fn update_exact_bytes(hasher: &mut Hasher, bytes: &[u8]) {
+    #[cfg(feature = "parallel")]
+    if bytes.len() >= EXACT_HASH_PARALLEL_MIN_BYTES {
+        hasher.update_rayon(bytes);
+        return;
+    }
+    hasher.update(bytes);
 }
 
 #[cfg(feature = "tracing")]
@@ -166,6 +199,9 @@ pub struct FingerprinterContext {
     blocks_buffer: Box<[[f32; 64 * 64]; 16]>,
     /// Center 32x32 float region (4 KiB), heap-allocated once.
     global_region_buffer: Box<[f32; 32 * 32]>,
+    /// Reused file-read buffer for the path entry points, so repeated
+    /// `fingerprint_path*` calls do not allocate a fresh buffer per file.
+    read_buffer: Vec<u8>,
 }
 
 impl Default for FingerprinterContext {
@@ -195,6 +231,7 @@ impl FingerprinterContext {
             dct_scratch: DctScratch::new(),
             blocks_buffer: zeroed_blocks(),
             global_region_buffer: Box::new([0.0f32; 32 * 32]),
+            read_buffer: Vec::new(),
         }
     }
 
@@ -269,8 +306,13 @@ impl FingerprinterContext {
         path: P,
     ) -> Result<MultiHashFingerprint, ImgFprintError> {
         let config = self.config;
-        let bytes = read_image_file(path.as_ref(), &config)?;
-        self.compute_all_hashes(&bytes, &config)
+        let mut bytes = std::mem::take(&mut self.read_buffer);
+        let result = match read_image_file_into(path.as_ref(), &config, &mut bytes) {
+            Ok(()) => self.compute_all_hashes(&bytes, &config),
+            Err(error) => Err(error),
+        };
+        self.read_buffer = bytes;
+        result
     }
 
     /// Reads a file (at most `max_input_bytes`) and fingerprints it with a
@@ -285,8 +327,13 @@ impl FingerprinterContext {
         algorithm: HashAlgorithm,
     ) -> Result<ImageFingerprint, ImgFprintError> {
         let config = self.config;
-        let bytes = read_image_file(path.as_ref(), &config)?;
-        self.compute_single_hash(&bytes, algorithm, &config, false)
+        let mut bytes = std::mem::take(&mut self.read_buffer);
+        let result = match read_image_file_into(path.as_ref(), &config, &mut bytes) {
+            Ok(()) => self.compute_single_hash(&bytes, algorithm, &config, false),
+            Err(error) => Err(error),
+        };
+        self.read_buffer = bytes;
+        result
     }
 
     /// Fingerprints an already-decoded image (video frame, in-memory
@@ -334,8 +381,13 @@ impl FingerprinterContext {
         path: P,
         preprocess: &PreprocessConfig,
     ) -> Result<MultiHashFingerprint, ImgFprintError> {
-        let bytes = read_image_file(path.as_ref(), preprocess)?;
-        self.compute_all_hashes(&bytes, preprocess)
+        let mut bytes = std::mem::take(&mut self.read_buffer);
+        let result = match read_image_file_into(path.as_ref(), preprocess, &mut bytes) {
+            Ok(()) => self.compute_all_hashes(&bytes, preprocess),
+            Err(error) => Err(error),
+        };
+        self.read_buffer = bytes;
+        result
     }
 
     /// Fingerprints a decoded image with a one-off [`PreprocessConfig`].
@@ -404,7 +456,7 @@ impl FingerprinterContext {
     /// BLAKE3-digests `bytes` with the reusable hasher.
     fn update_exact(&mut self, bytes: &[u8]) -> [u8; 32] {
         self.exact_hasher.reset();
-        self.exact_hasher.update(bytes);
+        update_exact_bytes(&mut self.exact_hasher, bytes);
         *self.exact_hasher.finalize().as_bytes()
     }
 
@@ -423,7 +475,7 @@ impl FingerprinterContext {
         self.exact_hasher.reset();
         match image {
             DynamicImage::ImageRgb8(rgb) => {
-                self.exact_hasher.update(&rgb.as_raw()[..pixels * 3]);
+                update_exact_bytes(&mut self.exact_hasher, &rgb.as_raw()[..pixels * 3]);
             }
             DynamicImage::ImageLuma8(gray) => {
                 let mut out = [0u8; CHUNK_PIXELS * 3];
@@ -432,7 +484,7 @@ impl FingerprinterContext {
                     for (d, &y) in dst.iter_mut().zip(chunk) {
                         *d = [y, y, y];
                     }
-                    self.exact_hasher.update(&out[..chunk.len() * 3]);
+                    update_exact_bytes(&mut self.exact_hasher, &out[..chunk.len() * 3]);
                 }
             }
             DynamicImage::ImageRgba8(rgba) => {
@@ -443,11 +495,11 @@ impl FingerprinterContext {
                     for (d, s) in dst.iter_mut().zip(src) {
                         *d = [s[0], s[1], s[2]];
                     }
-                    self.exact_hasher.update(&out[..src.len() * 3]);
+                    update_exact_bytes(&mut self.exact_hasher, &out[..src.len() * 3]);
                 }
             }
             other => {
-                self.exact_hasher.update(other.to_rgb8().as_raw());
+                update_exact_bytes(&mut self.exact_hasher, other.to_rgb8().as_raw());
             }
         }
         *self.exact_hasher.finalize().as_bytes()
@@ -678,6 +730,45 @@ where
     results
 }
 
+/// Slice variant of [`run_batch`] that borrows its inputs, so the in-memory
+/// batch APIs do not build an intermediate `Vec` of references per call.
+fn run_batch_ref<In, Out, F>(
+    inputs: &[In],
+    #[cfg_attr(not(feature = "tracing"), allow(unused_variables))] stage: &'static str,
+    f: F,
+) -> Vec<Out>
+where
+    In: Sync,
+    Out: Send,
+    F: Fn(&mut FingerprinterContext, &In) -> Out + Send + Sync,
+{
+    #[cfg(feature = "tracing")]
+    let start = std::time::Instant::now();
+
+    #[cfg(feature = "parallel")]
+    let results: Vec<Out> = {
+        use rayon::prelude::*;
+        inputs
+            .par_iter()
+            .map(|input| with_shared_ctx(|ctx| f(ctx, input)))
+            .collect()
+    };
+
+    #[cfg(not(feature = "parallel"))]
+    let results: Vec<Out> =
+        with_shared_ctx(|ctx| inputs.iter().map(|input| f(ctx, input)).collect());
+
+    #[cfg(feature = "tracing")]
+    debug!(
+        duration_ms = start.elapsed().as_millis(),
+        count = results.len(),
+        parallel = cfg!(feature = "parallel"),
+        "{stage} completed"
+    );
+
+    results
+}
+
 /// Shared body of the deprecated `fingerprint_batch_chunked` functions.
 fn batch_chunked<S, F>(images: &[(S, Vec<u8>)], chunk_size: usize, mut callback: F)
 where
@@ -685,8 +776,7 @@ where
     F: FnMut(S, Result<MultiHashFingerprint, ImgFprintError>),
 {
     for chunk in images.chunks(chunk_size.max(1)) {
-        let refs: Vec<&(S, Vec<u8>)> = chunk.iter().collect();
-        for (id, result) in run_batch(refs, "batch_chunked", |ctx, (id, bytes)| {
+        for (id, result) in run_batch_ref(chunk, "batch_chunked", |ctx, (id, bytes)| {
             (id.clone(), ctx.fingerprint(bytes))
         }) {
             callback(id, result);
@@ -784,8 +874,7 @@ impl ImageFingerprinter {
     where
         S: Clone + Send + Sync,
     {
-        let refs: Vec<&(S, Vec<u8>)> = images.iter().collect();
-        run_batch(refs, "batch", |ctx, (id, bytes)| {
+        run_batch_ref(images, "batch", |ctx, (id, bytes)| {
             (id.clone(), ctx.fingerprint(bytes))
         })
     }
@@ -799,8 +888,7 @@ impl ImageFingerprinter {
     where
         S: Clone + Send + Sync,
     {
-        let refs: Vec<&(S, Vec<u8>)> = images.iter().collect();
-        run_batch(refs, "batch_with", |ctx, (id, bytes)| {
+        run_batch_ref(images, "batch_with", |ctx, (id, bytes)| {
             (id.clone(), ctx.fingerprint_with(bytes, algorithm))
         })
     }
@@ -1005,6 +1093,21 @@ mod tests {
             (ctx.fingerprint(&img).unwrap(), inner)
         });
         assert_eq!(outer, inner);
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn parallel_exact_hash_matches_serial() {
+        // Input above the threshold exercises `update_rayon`; the digest must
+        // equal the serial `update` digest of the same bytes.
+        let data: Vec<u8> = (0..(EXACT_HASH_PARALLEL_MIN_BYTES + 32))
+            .map(|i| (i % 251) as u8)
+            .collect();
+        let mut serial = Hasher::new();
+        serial.update(&data);
+        let mut par = Hasher::new();
+        update_exact_bytes(&mut par, &data);
+        assert_eq!(serial.finalize(), par.finalize());
     }
 
     #[cfg(feature = "parallel")]

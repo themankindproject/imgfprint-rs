@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Parallel BLAKE3 for large exact hashes**: `update_exact` / `pixel_exact_hash` route slices of 1 MiB or more through BLAKE3's rayon implementation (the `parallel` feature now enables `blake3/rayon`). Digesting a 12.6 MB RGB8 frame drops from ~3.8 ms to ~1.1 ms; the digest output is bit-identical and a test asserts the parallel and serial paths agree.
+- **Fewer allocations in the path and batch APIs**: `fingerprint_path*` read through a per-context buffer instead of allocating a fresh `Vec` per file (warm `fingerprint_path` drops from 527 to 526 allocations and ~147 KB of churn per call; `fingerprint_paths` ×4 from 2,237 to 2,134), and the in-memory batch APIs iterate their slice directly instead of collecting a `Vec` of references first.
+- **`compare` benchmarks measure real work again**: the result of `compare` was discarded, so the compiler deleted the call entirely (criterion reported ~0.6 ns). They now `black_box` the result and pair fingerprints of differently-sized images, exercising the perceptual scoring path (~275 ns / ~92 ns) instead of the same-image exact-hash short-circuit.
+
 ## [0.4.7] - 2026-10-05
 
 ### Added

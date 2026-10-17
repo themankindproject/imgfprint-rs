@@ -62,25 +62,26 @@ fn benchmark_fingerprint_single(c: &mut Criterion) {
 
 fn benchmark_compare(c: &mut Criterion) {
     let img = create_test_image();
+    // Different bytes on purpose: two encodings of the same image would
+    // short-circuit on the exact-hash match instead of exercising the
+    // perceptual comparison this benchmark is about.
+    let near = create_test_image_size(299, 300);
     let fp1 = ImageFingerprinter::fingerprint(&img).unwrap();
-    let fp2 = ImageFingerprinter::fingerprint(&img).unwrap();
+    let fp2 = ImageFingerprinter::fingerprint(&near).unwrap();
 
     c.bench_function("compare_multi", |b| {
-        b.iter(|| {
-            let _ = fp1.compare(black_box(&fp2));
-        })
+        b.iter(|| black_box(fp1.compare(black_box(&fp2))));
     });
 }
 
 fn benchmark_compare_single(c: &mut Criterion) {
     let img = create_test_image();
+    let near = create_test_image_size(299, 300);
     let fp1 = ImageFingerprinter::fingerprint_with(&img, HashAlgorithm::PHash).unwrap();
-    let fp2 = ImageFingerprinter::fingerprint_with(&img, HashAlgorithm::PHash).unwrap();
+    let fp2 = ImageFingerprinter::fingerprint_with(&near, HashAlgorithm::PHash).unwrap();
 
     c.bench_function("compare_single", |b| {
-        b.iter(|| {
-            let _ = black_box(&fp1).compare(black_box(&fp2));
-        })
+        b.iter(|| black_box(black_box(&fp1).compare(black_box(&fp2))));
     });
 }
 
