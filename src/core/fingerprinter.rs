@@ -81,6 +81,25 @@ fn zeroed_blocks() -> Box<[[f32; 64 * 64]; 16]> {
         .unwrap_or_else(|_| unreachable!("vec! built exactly 16 blocks"))
 }
 
+/// Minimum input size for BLAKE3's parallel code path. Below this threshold
+/// the thread-pool overhead outweighs the parallel gain, so small inputs
+/// (including every Luma8/RGBA8 conversion chunk) stay on the serial path.
+#[cfg(feature = "parallel")]
+const EXACT_HASH_PARALLEL_MIN_BYTES: usize = 1 << 20;
+
+/// Feeds `bytes` into `hasher`, using BLAKE3's rayon path for large inputs.
+///
+/// The digest is identical either way (BLAKE3 output does not depend on how
+/// the work is scheduled); only the number of threads doing it changes.
+fn update_exact_bytes(hasher: &mut Hasher, bytes: &[u8]) {
+    #[cfg(feature = "parallel")]
+    if bytes.len() >= EXACT_HASH_PARALLEL_MIN_BYTES {
+        hasher.update_rayon(bytes);
+        return;
+    }
+    hasher.update(bytes);
+}
+
 #[cfg(feature = "tracing")]
 use tracing::{debug, instrument};
 
@@ -404,7 +423,7 @@ impl FingerprinterContext {
     /// BLAKE3-digests `bytes` with the reusable hasher.
     fn update_exact(&mut self, bytes: &[u8]) -> [u8; 32] {
         self.exact_hasher.reset();
-        self.exact_hasher.update(bytes);
+        update_exact_bytes(&mut self.exact_hasher, bytes);
         *self.exact_hasher.finalize().as_bytes()
     }
 
@@ -423,7 +442,7 @@ impl FingerprinterContext {
         self.exact_hasher.reset();
         match image {
             DynamicImage::ImageRgb8(rgb) => {
-                self.exact_hasher.update(&rgb.as_raw()[..pixels * 3]);
+                update_exact_bytes(&mut self.exact_hasher, &rgb.as_raw()[..pixels * 3]);
             }
             DynamicImage::ImageLuma8(gray) => {
                 let mut out = [0u8; CHUNK_PIXELS * 3];
@@ -432,7 +451,7 @@ impl FingerprinterContext {
                     for (d, &y) in dst.iter_mut().zip(chunk) {
                         *d = [y, y, y];
                     }
-                    self.exact_hasher.update(&out[..chunk.len() * 3]);
+                    update_exact_bytes(&mut self.exact_hasher, &out[..chunk.len() * 3]);
                 }
             }
             DynamicImage::ImageRgba8(rgba) => {
@@ -443,11 +462,11 @@ impl FingerprinterContext {
                     for (d, s) in dst.iter_mut().zip(src) {
                         *d = [s[0], s[1], s[2]];
                     }
-                    self.exact_hasher.update(&out[..src.len() * 3]);
+                    update_exact_bytes(&mut self.exact_hasher, &out[..src.len() * 3]);
                 }
             }
             other => {
-                self.exact_hasher.update(other.to_rgb8().as_raw());
+                update_exact_bytes(&mut self.exact_hasher, other.to_rgb8().as_raw());
             }
         }
         *self.exact_hasher.finalize().as_bytes()
@@ -1005,6 +1024,21 @@ mod tests {
             (ctx.fingerprint(&img).unwrap(), inner)
         });
         assert_eq!(outer, inner);
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn parallel_exact_hash_matches_serial() {
+        // Input above the threshold exercises `update_rayon`; the digest must
+        // equal the serial `update` digest of the same bytes.
+        let data: Vec<u8> = (0..(EXACT_HASH_PARALLEL_MIN_BYTES + 32))
+            .map(|i| (i % 251) as u8)
+            .collect();
+        let mut serial = Hasher::new();
+        serial.update(&data);
+        let mut par = Hasher::new();
+        update_exact_bytes(&mut par, &data);
+        assert_eq!(serial.finalize(), par.finalize());
     }
 
     #[cfg(feature = "parallel")]

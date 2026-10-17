@@ -42,7 +42,9 @@ bytemuck = { version = "1.18", features = ["derive"] }
 [features]
 default = ["serde", "parallel"]
 serde = ["dep:serde"]
-parallel = ["dep:rayon"]
+# Also routes large BLAKE3 exact-hash inputs through the rayon path
+# (see `update_exact_bytes` in core/fingerprinter.rs).
+parallel = ["dep:rayon", "blake3/rayon"]
 local-embedding = ["dep:tract-onnx"]
 tracing = ["dep:tracing"]
 # Extra input formats (PNG, JPEG, GIF, WebP, and BMP are always on).
