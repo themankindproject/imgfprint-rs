@@ -865,6 +865,9 @@ impl ImageFingerprinter {
 
     /// Fingerprints in-memory images, returning results in input order.
     ///
+    /// For images held as borrowed byte slices (or any other byte container),
+    /// see [`fingerprint_batch_borrowed`](Self::fingerprint_batch_borrowed).
+    ///
     /// With the `parallel` feature (default) images are spread across rayon
     /// workers, each reusing a per-thread context.
     #[cfg_attr(feature = "tracing", instrument(skip(images), fields(image_count = images.len())))]
@@ -890,6 +893,43 @@ impl ImageFingerprinter {
     {
         run_batch_ref(images, "batch_with", |ctx, (id, bytes)| {
             (id.clone(), ctx.fingerprint_with(bytes, algorithm))
+        })
+    }
+
+    /// Fingerprints in-memory images whose bytes may be borrowed, returning
+    /// results in input order.
+    ///
+    /// Like [`fingerprint_batch`](Self::fingerprint_batch), but each image can
+    /// be any byte container — `&[u8]`, boxed slices, `Bytes`, and so on — so
+    /// callers are not forced to own a `Vec<u8>` per image. With the
+    /// `parallel` feature (default) images are spread across rayon workers,
+    /// each reusing a per-thread context.
+    #[cfg_attr(feature = "tracing", instrument(skip(images), fields(image_count = images.len())))]
+    pub fn fingerprint_batch_borrowed<S, B>(
+        images: &[(S, B)],
+    ) -> Vec<(S, Result<MultiHashFingerprint, ImgFprintError>)>
+    where
+        S: Clone + Send + Sync,
+        B: AsRef<[u8]> + Sync,
+    {
+        run_batch_ref(images, "batch_borrowed", |ctx, (id, bytes)| {
+            (id.clone(), ctx.fingerprint(bytes.as_ref()))
+        })
+    }
+
+    /// Single-algorithm variant of
+    /// [`fingerprint_batch_borrowed`](Self::fingerprint_batch_borrowed).
+    #[cfg_attr(feature = "tracing", instrument(skip(images), fields(image_count = images.len(), algorithm = ?algorithm)))]
+    pub fn fingerprint_batch_borrowed_with<S, B>(
+        images: &[(S, B)],
+        algorithm: HashAlgorithm,
+    ) -> Vec<(S, Result<ImageFingerprint, ImgFprintError>)>
+    where
+        S: Clone + Send + Sync,
+        B: AsRef<[u8]> + Sync,
+    {
+        run_batch_ref(images, "batch_borrowed_with", |ctx, (id, bytes)| {
+            (id.clone(), ctx.fingerprint_with(bytes.as_ref(), algorithm))
         })
     }
 
