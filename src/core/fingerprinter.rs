@@ -7,7 +7,10 @@ use crate::hash::dhash::{compute_dhash, compute_dhash_from_64x64};
 use crate::hash::phash::{
     compute_phash_from_64x64_with_scratch, compute_phash_with_scratch, DctScratch,
 };
-use crate::imgproc::decode::{decode_image_with_config, validate_dimensions, PreprocessConfig};
+use crate::imgproc::decode::{
+    check_config_sanity, decode_from_reader, decode_image_with_config, validate_dimensions,
+    PreprocessConfig,
+};
 use crate::imgproc::preprocess::{
     extract_blocks_into_buffer, extract_global_region_into_buffer, Preprocessor,
 };
@@ -18,53 +21,74 @@ use std::path::Path;
 #[cfg(feature = "tracing")]
 use std::time::Instant;
 
-/// Reads a file into `bytes` (reusing its allocation), never buffering more
-/// than `config.max_input_bytes + 1` bytes.
+/// Cap on the reusable read buffer used by the path entry points. Files
+/// larger than this are hashed in repeated chunks, so the retained buffer
+/// stays bounded no matter how far `max_input_bytes` is raised.
+const READ_BUFFER_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+/// Per-read probe size used once the metadata hint is exhausted, so honest
+/// files do not grow the reusable buffer just to observe EOF.
+const READ_PROBE_BYTES: u64 = 4096;
+
+/// The size error shared by the file-read paths; metadata-reported and
+/// actually-read sizes must produce the same message.
+fn file_too_large(size: u64, max: u64) -> ImgFprintError {
+    ImgFprintError::IoError(format!(
+        "file size {size} bytes exceeds maximum {max} bytes"
+    ))
+}
+
+/// Streams `file` through `hasher`, holding at most [`READ_BUFFER_MAX_BYTES`]
+/// at once and never hashing more than `max + 1` bytes.
 ///
 /// The size reported by metadata is only a fast-path rejection: special files
 /// (`/dev/zero`, FIFOs, procfs entries) report a length of 0 while yielding
-/// unbounded data, so the read itself is capped with [`Read::take`].
-///
-/// [`Read::take`]: std::io::Read::take
-fn read_image_file_into(
-    path: &Path,
-    config: &PreprocessConfig,
-    bytes: &mut Vec<u8>,
-) -> Result<(), ImgFprintError> {
+/// unbounded data, so the loop caps the total itself. Returns bytes hashed.
+fn hash_file_into(
+    hasher: &mut Hasher,
+    file: &mut std::fs::File,
+    max: u64,
+    reported: u64,
+    buf: &mut Vec<u8>,
+) -> Result<u64, ImgFprintError> {
     use std::io::Read;
 
-    bytes.clear();
-    let max = config.max_input_bytes as u64;
-    let too_large = |size: u64| {
-        ImgFprintError::IoError(format!(
-            "file size {size} bytes exceeds maximum {max} bytes"
-        ))
-    };
+    let cap = READ_BUFFER_MAX_BYTES as u64;
+    let mut total: u64 = 0;
+    let mut probed = false;
 
-    let file = std::fs::File::open(path)?;
-    let reported = file.metadata()?.len();
-    if reported > max {
-        return Err(too_large(reported));
+    loop {
+        // `total <= max` here, so the budget is at least 1; `max + 1`
+        // reproduces the old `Read::take` ceiling for endless special files.
+        let budget = max.saturating_add(1).saturating_sub(total);
+        // Reads are sized by what the metadata hint says is left, so a small
+        // file never grows the reusable buffer to the full chunk. Once the
+        // hint is spent, one small probe detects EOF without growing the
+        // buffer; a file whose metadata lied low then falls back to full
+        // chunks (as do special files, which report no size at all).
+        let want = if total < reported {
+            budget.min(cap).min(reported - total)
+        } else if !probed {
+            probed = true;
+            budget.min(cap).min(READ_PROBE_BYTES)
+        } else {
+            budget.min(cap)
+        };
+        let want = usize::try_from(want).unwrap_or(READ_BUFFER_MAX_BYTES);
+
+        buf.resize(want, 0);
+        let read = file.read(buf)?;
+        if read == 0 {
+            break;
+        }
+        total += read as u64;
+        if total > max {
+            return Err(file_too_large(total, max));
+        }
+        update_exact_bytes(hasher, &buf[..read]);
     }
 
-    // `reported` is only a hint (0 for special files); cap the pre-allocation
-    // so a lying size can never trigger a large up-front reservation. Reused
-    // buffers keep their high-water capacity across calls.
-    #[allow(clippy::cast_possible_truncation)] // reported <= max_input_bytes: usize
-    bytes.reserve(reported as usize);
-    file.take(max.saturating_add(1)).read_to_end(bytes)?;
-    if bytes.len() as u64 > max {
-        return Err(too_large(bytes.len() as u64));
-    }
-    Ok(())
-}
-
-/// Reads a file into a fresh buffer. Thin wrapper over
-/// [`read_image_file_into`] for callers without a reusable buffer.
-fn read_image_file(path: &Path, config: &PreprocessConfig) -> Result<Vec<u8>, ImgFprintError> {
-    let mut bytes = Vec::new();
-    read_image_file_into(path, config, &mut bytes)?;
-    Ok(bytes)
+    Ok(total)
 }
 
 thread_local! {
@@ -199,8 +223,9 @@ pub struct FingerprinterContext {
     blocks_buffer: Box<[[f32; 64 * 64]; 16]>,
     /// Center 32x32 float region (4 KiB), heap-allocated once.
     global_region_buffer: Box<[f32; 32 * 32]>,
-    /// Reused file-read buffer for the path entry points, so repeated
-    /// `fingerprint_path*` calls do not allocate a fresh buffer per file.
+    /// Reusable read buffer for the path entry points. Capped at
+    /// [`READ_BUFFER_MAX_BYTES`], so larger files stream through it in
+    /// chunks instead of growing it to the file size.
     read_buffer: Vec<u8>,
 }
 
@@ -307,10 +332,12 @@ impl FingerprinterContext {
     ) -> Result<MultiHashFingerprint, ImgFprintError> {
         let config = self.config;
         let mut bytes = std::mem::take(&mut self.read_buffer);
-        let result = match read_image_file_into(path.as_ref(), &config, &mut bytes) {
-            Ok(()) => self.compute_all_hashes(&bytes, &config),
-            Err(error) => Err(error),
-        };
+        let result = self.fingerprint_streamed_file(
+            path.as_ref(),
+            &config,
+            &mut bytes,
+            |ctx, image, exact_hash| ctx.hash_decoded(image, exact_hash),
+        );
         self.read_buffer = bytes;
         result
     }
@@ -328,10 +355,12 @@ impl FingerprinterContext {
     ) -> Result<ImageFingerprint, ImgFprintError> {
         let config = self.config;
         let mut bytes = std::mem::take(&mut self.read_buffer);
-        let result = match read_image_file_into(path.as_ref(), &config, &mut bytes) {
-            Ok(()) => self.compute_single_hash(&bytes, algorithm, &config, false),
-            Err(error) => Err(error),
-        };
+        let result = self.fingerprint_streamed_file(
+            path.as_ref(),
+            &config,
+            &mut bytes,
+            |ctx, image, exact_hash| ctx.hash_single_decoded(image, algorithm, exact_hash, false),
+        );
         self.read_buffer = bytes;
         result
     }
@@ -382,10 +411,12 @@ impl FingerprinterContext {
         preprocess: &PreprocessConfig,
     ) -> Result<MultiHashFingerprint, ImgFprintError> {
         let mut bytes = std::mem::take(&mut self.read_buffer);
-        let result = match read_image_file_into(path.as_ref(), preprocess, &mut bytes) {
-            Ok(()) => self.compute_all_hashes(&bytes, preprocess),
-            Err(error) => Err(error),
-        };
+        let result = self.fingerprint_streamed_file(
+            path.as_ref(),
+            preprocess,
+            &mut bytes,
+            |ctx, image, exact_hash| ctx.hash_decoded(image, exact_hash),
+        );
         self.read_buffer = bytes;
         result
     }
@@ -458,6 +489,50 @@ impl FingerprinterContext {
         self.exact_hasher.reset();
         update_exact_bytes(&mut self.exact_hasher, bytes);
         *self.exact_hasher.finalize().as_bytes()
+    }
+
+    /// Shared body of the path entry points: streams the file through the
+    /// exact hasher and decodes the same bytes straight from the handle, so a
+    /// full-file buffer is never materialized (`buf` only ever holds one
+    /// chunk). `finish` receives the decoded image plus the exact hash of the
+    /// raw file bytes.
+    fn fingerprint_streamed_file<T>(
+        &mut self,
+        path: &Path,
+        preprocess: &PreprocessConfig,
+        buf: &mut Vec<u8>,
+        finish: impl FnOnce(
+            &mut FingerprinterContext,
+            &DynamicImage,
+            [u8; 32],
+        ) -> Result<T, ImgFprintError>,
+    ) -> Result<T, ImgFprintError> {
+        use std::io::{Seek, SeekFrom};
+
+        let max = preprocess.max_input_bytes as u64;
+        let mut file = std::fs::File::open(path)?;
+        let reported = file.metadata()?.len();
+        if reported > max {
+            return Err(file_too_large(reported, max));
+        }
+
+        self.exact_hasher.reset();
+        let hashed = trace_result_stage!("exact_hash", {
+            hash_file_into(&mut self.exact_hasher, &mut file, max, reported, buf)
+        });
+        let exact_hash = *self.exact_hasher.finalize().as_bytes();
+
+        if hashed == 0 {
+            return Err(ImgFprintError::invalid_image("empty input"));
+        }
+        check_config_sanity(preprocess)?;
+
+        let image = trace_result_stage!("decode", {
+            file.seek(SeekFrom::Start(0))?;
+            decode_from_reader(std::io::BufReader::new(file), preprocess)
+        });
+
+        finish(self, &image, exact_hash)
     }
 
     /// BLAKE3 of the image's RGB8 pixel bytes, i.e. of `image.to_rgb8()`.
@@ -611,6 +686,18 @@ impl FingerprinterContext {
             decode_image_with_config(image_bytes, preprocess)
         });
 
+        self.hash_single_decoded(&image, algorithm, exact_hash, fast_resize)
+    }
+
+    /// Single-algorithm layers from a decoded image and a precomputed exact
+    /// hash, shared by the in-memory and streamed file paths.
+    fn hash_single_decoded(
+        &mut self,
+        image: &DynamicImage,
+        algorithm: HashAlgorithm,
+        exact_hash: [u8; 32],
+        fast_resize: bool,
+    ) -> Result<ImageFingerprint, ImgFprintError> {
         // Lanczos3 for every algorithm keeps `fingerprint_with(bytes, alg)`
         // bit-identical to the `alg` layer of `fingerprint(bytes)`. The
         // bilinear path only serves the deprecated `fingerprint_with_fast`;
@@ -618,12 +705,10 @@ impl FingerprinterContext {
         let normalized = match algorithm {
             HashAlgorithm::AHash | HashAlgorithm::DHash if fast_resize => {
                 trace_result_stage!("normalize_fast", {
-                    self.preprocessor.normalize_as_slice_fast(&image)
+                    self.preprocessor.normalize_as_slice_fast(image)
                 })
             }
-            _ => trace_result_stage!("normalize", {
-                self.preprocessor.normalize_as_slice(&image)
-            }),
+            _ => trace_result_stage!("normalize", { self.preprocessor.normalize_as_slice(image) }),
         };
 
         trace_stage!("extract_global_region", {
@@ -935,8 +1020,9 @@ impl ImageFingerprinter {
 
     /// Fingerprints many files, returning `(path, result)` in input order.
     ///
-    /// Files are read inside the workers, so memory stays bounded by one
-    /// file per worker thread no matter how many paths are given. With the
+    /// Files are streamed inside the workers, so memory stays bounded per
+    /// worker by the decoded image plus a fixed chunk buffer no matter how
+    /// many paths are given. With the
     /// `parallel` feature (default) files are processed across rayon
     /// workers; without it, sequentially. Prefer this over
     /// [`fingerprint_batch`](Self::fingerprint_batch) for directory-scale
@@ -974,7 +1060,7 @@ impl ImageFingerprinter {
 
     /// Lazily fingerprints paths one at a time on the calling thread.
     ///
-    /// Only one file is in memory at a time. For parallel processing use
+    /// Only one decoded image is in memory at a time. For parallel processing use
     /// [`fingerprint_paths`](Self::fingerprint_paths).
     ///
     /// # Example
@@ -1022,12 +1108,12 @@ impl ImageFingerprinter {
         since = "0.4.7",
         note = "use `FingerprinterContext::with_config(config).fingerprint_path(path)`"
     )]
+    #[allow(deprecated)] // delegates to the deprecated context method
     pub fn fingerprint_path_with_preprocess<P: AsRef<Path>>(
         path: P,
         preprocess: &PreprocessConfig,
     ) -> Result<MultiHashFingerprint, ImgFprintError> {
-        let bytes = read_image_file(path.as_ref(), preprocess)?;
-        with_shared_ctx(|ctx| ctx.compute_all_hashes(&bytes, preprocess))
+        with_shared_ctx(|ctx| ctx.fingerprint_path_with_preprocess(path.as_ref(), preprocess))
     }
 
     /// Fingerprints a decoded image with a one-off [`PreprocessConfig`].
@@ -1133,6 +1219,57 @@ mod tests {
             (ctx.fingerprint(&img).unwrap(), inner)
         });
         assert_eq!(outer, inner);
+    }
+
+    #[test]
+    fn streamed_hash_matches_whole_buffer_digest() {
+        // Two chunks plus a remainder exercises the multi-chunk loop.
+        let len = READ_BUFFER_MAX_BYTES * 2 + 123;
+        let data: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+        let path = std::env::temp_dir().join("imgfprint_stream_parity.bin");
+        std::fs::write(&path, &data).unwrap();
+
+        let mut file = std::fs::File::open(&path).unwrap();
+        let reported = file.metadata().unwrap().len();
+        let mut hasher = Hasher::new();
+        let mut buf = Vec::new();
+        let total = hash_file_into(&mut hasher, &mut file, len as u64, reported, &mut buf).unwrap();
+
+        assert_eq!(total, len as u64);
+        assert_eq!(
+            *hasher.finalize().as_bytes(),
+            *blake3::hash(&data).as_bytes()
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn streamed_hash_caps_oversize_reads() {
+        let path = std::env::temp_dir().join("imgfprint_stream_cap.bin");
+        std::fs::write(&path, vec![7u8; 4096]).unwrap();
+
+        let mut file = std::fs::File::open(&path).unwrap();
+        let mut hasher = Hasher::new();
+        let mut buf = Vec::new();
+        let err = hash_file_into(&mut hasher, &mut file, 1024, 4096, &mut buf).unwrap_err();
+
+        assert!(matches!(err, ImgFprintError::IoError(_)), "{err:?}");
+        assert_eq!(
+            err.to_string(),
+            "io error: file size 1025 bytes exceeds maximum 1024 bytes"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn streamed_path_reads_empty_file_as_empty_input() {
+        let path = std::env::temp_dir().join("imgfprint_stream_empty.bin");
+        std::fs::write(&path, b"").unwrap();
+
+        let mut ctx = FingerprinterContext::new();
+        let err = ctx.fingerprint_path(&path).unwrap_err();
+        assert_eq!(err, ImgFprintError::invalid_image("empty input"));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[cfg(feature = "parallel")]
