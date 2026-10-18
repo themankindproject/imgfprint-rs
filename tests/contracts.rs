@@ -370,6 +370,27 @@ fn context_config_applies_to_every_entry_point() {
 }
 
 #[test]
+fn batch_borrowed_apis_accept_byte_slices() {
+    let owned = vec![(1u32, png_bytes(48, 1)), (2, png_bytes(56, 2))];
+    let borrowed: Vec<(u32, &[u8])> = owned
+        .iter()
+        .map(|(id, bytes)| (*id, bytes.as_slice()))
+        .collect();
+
+    let via_owned = ImageFingerprinter::fingerprint_batch(&owned);
+    let via_borrowed = ImageFingerprinter::fingerprint_batch_borrowed(&borrowed);
+    assert_eq!(via_borrowed.len(), via_owned.len());
+    for ((id_b, res_b), (id_o, res_o)) in via_borrowed.iter().zip(&via_owned) {
+        assert_eq!(id_b, id_o);
+        assert_eq!(res_b.as_ref().unwrap(), res_o.as_ref().unwrap());
+    }
+
+    let single =
+        ImageFingerprinter::fingerprint_batch_borrowed_with(&borrowed, HashAlgorithm::AHash);
+    assert!(single.iter().all(|(_, result)| result.is_ok()));
+}
+
+#[test]
 fn fingerprint_paths_preserves_order_and_reports_per_path_errors() {
     let dir = std::env::temp_dir();
     let mut paths = Vec::new();

@@ -60,6 +60,16 @@ fn benchmark_fingerprint_single(c: &mut Criterion) {
     });
 }
 
+fn benchmark_fingerprint_image(c: &mut Criterion) {
+    let img = image::load_from_memory(&create_test_image_size(2048, 2048)).unwrap();
+
+    c.bench_function("fingerprint_image_2048", |b| {
+        b.iter(|| {
+            let _ = ImageFingerprinter::fingerprint_image(black_box(&img));
+        })
+    });
+}
+
 fn benchmark_compare(c: &mut Criterion) {
     let img = create_test_image();
     // Different bytes on purpose: two encodings of the same image would
@@ -253,6 +263,7 @@ criterion_group!(
     benches,
     benchmark_fingerprint_multi,
     benchmark_fingerprint_single,
+    benchmark_fingerprint_image,
     benchmark_compare,
     benchmark_compare_single,
     benchmark_batch,

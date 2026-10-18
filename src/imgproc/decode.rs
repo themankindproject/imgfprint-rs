@@ -2,7 +2,7 @@
 
 use crate::error::ImgFprintError;
 use image::{DynamicImage, ImageDecoder, ImageError};
-use std::io::Cursor;
+use std::io::{BufRead, Cursor, Seek};
 
 /// Default maximum image edge length, in pixels. Beyond this, decode is rejected.
 pub const DEFAULT_MAX_DIMENSION: u32 = 8192;
@@ -59,7 +59,7 @@ pub fn decode_image(image_bytes: &[u8]) -> Result<DynamicImage, ImgFprintError> 
 }
 
 /// Rejects an inconsistent config where `min_dimension > max_dimension`.
-fn check_config_sanity(config: &PreprocessConfig) -> Result<(), ImgFprintError> {
+pub(crate) fn check_config_sanity(config: &PreprocessConfig) -> Result<(), ImgFprintError> {
     if config.min_dimension > config.max_dimension {
         return Err(ImgFprintError::invalid_image(format!(
             "invalid config: min_dimension ({}) > max_dimension ({})",
@@ -154,6 +154,19 @@ pub fn decode_image_with_config(
         )));
     }
 
+    decode_from_reader(Cursor::new(image_bytes), config)
+}
+
+/// Shared decode body over any `BufRead + Seek` source (in-memory bytes or a
+/// file handle), so the path entry points can decode straight from disk.
+///
+/// Callers own the input-size and config-sanity guards (see
+/// [`decode_image_with_config`]); the dimension checks, the
+/// decompression-bomb cap, and EXIF orientation handling are shared here.
+pub(crate) fn decode_from_reader<R: BufRead + Seek>(
+    reader: R,
+    config: &PreprocessConfig,
+) -> Result<DynamicImage, ImgFprintError> {
     // Cap decoded memory at max_dimension² × 4 bytes (RGBA8 worst case;
     // 256 MiB at the 8192 default). Saturating math: a pathological custom
     // config must yield a huge cap, never a wrapped one. The reader gets the
@@ -169,7 +182,7 @@ pub fn decode_image_with_config(
     // One decoder for header, metadata, and pixels: the previous
     // probe-then-decode flow parsed every header twice (and copied every
     // JPEG input twice, since the JPEG decoder buffers its whole input).
-    let mut reader = image::ImageReader::new(Cursor::new(image_bytes))
+    let mut reader = image::ImageReader::new(reader)
         .with_guessed_format()
         .map_err(|e| ImgFprintError::decode_error(format!("format detection failed: {e}")))?;
     reader.limits(limits.clone());
